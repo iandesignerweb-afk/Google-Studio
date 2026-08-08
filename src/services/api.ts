@@ -153,15 +153,6 @@ export const api = {
     return res;
   },
 
-  loginWithGoogle: async (googleData: { email: string; name?: string; googleId?: string }) => {
-    const res = await request<{ token: string; user: User }>('/api/auth/google', {
-      method: 'POST',
-      body: JSON.stringify(googleData),
-    });
-    setStoredToken(res.token);
-    return res;
-  },
-
   logout: async () => {
     try {
       await request('/api/auth/logout', { method: 'POST' });

@@ -47,29 +47,6 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
   const [recoveryError, setRecoveryError] = useState<string | null>(null);
   const [recoveryLoading, setRecoveryLoading] = useState(false);
 
-  // Google Modal fallback for testing / quick connect
-  const [showGooglePrompt, setShowGooglePrompt] = useState(false);
-  const [googlePromptEmail, setGooglePromptEmail] = useState('iankaue1993@gmail.com');
-  const [googlePromptName, setGooglePromptName] = useState('Ian Kauē');
-
-  // Handle Supabase OAuth redirects if any
-  useEffect(() => {
-    if (isSupabaseConfigured && supabase) {
-      supabase.auth.getSession().then(({ data: { session } }) => {
-        if (session?.user?.email) {
-          api
-            .loginWithGoogle({
-              email: session.user.email,
-              name: session.user.user_metadata?.full_name || session.user.email.split('@')[0],
-              googleId: session.user.id,
-            })
-            .then((res) => onLoginSuccess(res.user))
-            .catch(() => {});
-        }
-      });
-    }
-  }, [onLoginSuccess]);
-
   // Traditional Login via Supabase Auth
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -82,38 +59,6 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
     setError(null);
 
     try {
-      if (isSupabaseConfigured && supabase) {
-        let inputEmail = usuario.trim();
-
-        // Se o usuário digitou o nome de usuário em vez de e-mail com '@'
-        if (!inputEmail.includes('@')) {
-          const { data: profile } = await supabase
-            .from('users')
-            .select('email')
-            .ilike('usuario', inputEmail)
-            .maybeSingle();
-
-          if (profile && profile.email) {
-            inputEmail = profile.email;
-          } else {
-            inputEmail = `${inputEmail.toLowerCase()}@quadras.com`;
-          }
-        }
-
-        const { data, error: sbError } = await supabase.auth.signInWithPassword({
-          email: inputEmail,
-          password: senha.trim(),
-        });
-
-        if (!sbError && data?.session) {
-          localStorage.setItem('quadras_auth_token', data.session.access_token);
-          const userRes = await api.getMe();
-          onLoginSuccess(userRes);
-          return;
-        }
-      }
-
-      // Se a chamada via SDK client não for suficiente ou falhar, faz login via API (que usa Supabase Auth no servidor)
       const res = await api.login(usuario.trim(), senha.trim());
       onLoginSuccess(res.user);
     } catch (err: any) {
@@ -147,24 +92,6 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
     setLoading(true);
 
     try {
-      // Create user in Supabase Auth if active
-      if (isSupabaseConfigured && supabase) {
-        try {
-          await supabase.auth.signUp({
-            email: regEmail.trim(),
-            password: regSenha,
-            options: {
-              data: {
-                username: regUsuario.trim(),
-              },
-            },
-          });
-        } catch (spErr) {
-          console.warn('Supabase sign-up note:', spErr);
-        }
-      }
-
-      // Register in Backend DB
       const res = await api.register({
         usuario: regUsuario.trim(),
         email: regEmail.trim(),
@@ -175,7 +102,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
       setSuccessMsg('Cadastro realizado com sucesso! Conectando...');
       setTimeout(() => {
         onLoginSuccess(res.user);
-      }, 800);
+      }, 500);
     } catch (err: any) {
       setError(err.message || 'Erro ao realizar cadastro. Tente novamente.');
     } finally {
@@ -183,7 +110,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
     }
   };
 
-  // Google Sign In / Up
+  // Google Sign In / Up via Supabase OAuth
   const handleGoogleAuth = async () => {
     setGoogleLoading(true);
     setError(null);
@@ -197,34 +124,12 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
           },
         });
         if (oauthError) throw oauthError;
-        return; // Redirects away
       } catch (err: any) {
-        console.warn('Supabase Google OAuth fallback mode:', err);
+        setError(err.message || 'Erro ao iniciar autenticação com o Google.');
+        setGoogleLoading(false);
       }
-    }
-
-    // Open prompt for instant Google login/sign-up connection
-    setShowGooglePrompt(true);
-    setGoogleLoading(false);
-  };
-
-  const handleConfirmGooglePrompt = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!googlePromptEmail.trim()) return;
-
-    setGoogleLoading(true);
-    setError(null);
-
-    try {
-      const res = await api.loginWithGoogle({
-        email: googlePromptEmail.trim(),
-        name: googlePromptName.trim() || googlePromptEmail.split('@')[0],
-      });
-      setShowGooglePrompt(false);
-      onLoginSuccess(res.user);
-    } catch (err: any) {
-      setError(err.message || 'Erro ao conectar com conta Google.');
-    } finally {
+    } else {
+      setError('Supabase não está configurado para login via Google.');
       setGoogleLoading(false);
     }
   };
@@ -686,105 +591,6 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
                 </div>
               </form>
             )}
-          </div>
-        </div>
-      )}
-
-      {/* Google Prompt Modal for direct login */}
-      {showGooglePrompt && (
-        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-slate-800 border border-slate-700 rounded-2xl w-full max-w-md p-6 relative shadow-2xl">
-            <button
-              type="button"
-              onClick={() => setShowGooglePrompt(false)}
-              className="absolute top-4 right-4 text-slate-400 hover:text-white cursor-pointer"
-            >
-              <X className="w-5 h-5" />
-            </button>
-
-            <div className="flex items-center gap-3 mb-4">
-              <div className="p-2.5 bg-white rounded-xl flex items-center justify-center shadow">
-                <svg className="w-6 h-6" viewBox="0 0 24 24">
-                  <path
-                    fill="#4285F4"
-                    d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
-                  />
-                  <path
-                    fill="#34A853"
-                    d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
-                  />
-                  <path
-                    fill="#FBBC05"
-                    d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
-                  />
-                  <path
-                    fill="#EA4335"
-                    d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
-                  />
-                </svg>
-              </div>
-              <div>
-                <h3 className="text-lg font-bold text-white">
-                  Autenticação Google
-                </h3>
-                <p className="text-xs text-slate-400">
-                  Conectando com sua Conta do Google
-                </p>
-              </div>
-            </div>
-
-            <form onSubmit={handleConfirmGooglePrompt} className="space-y-4">
-              <div>
-                <label className="block text-xs font-medium text-slate-300 mb-1">
-                  E-mail da Conta Google
-                </label>
-                <input
-                  type="email"
-                  value={googlePromptEmail}
-                  onChange={(e) => setGooglePromptEmail(e.target.value)}
-                  placeholder="seuemail@gmail.com"
-                  className="w-full px-3.5 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-white text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-slate-300 mb-1">
-                  Nome Exibido (Opcional)
-                </label>
-                <input
-                  type="text"
-                  value={googlePromptName}
-                  onChange={(e) => setGooglePromptName(e.target.value)}
-                  placeholder="Seu Nome"
-                  className="w-full px-3.5 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-white text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                />
-              </div>
-
-              <div className="flex gap-2 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setShowGooglePrompt(false)}
-                  className="flex-1 py-2.5 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-xl text-xs font-semibold cursor-pointer"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  disabled={googleLoading}
-                  className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-semibold flex justify-center items-center gap-1.5 cursor-pointer"
-                >
-                  {googleLoading ? (
-                    'Conectando...'
-                  ) : (
-                    <>
-                      <span>Continuar</span>
-                      <ArrowRight className="w-4 h-4" />
-                    </>
-                  )}
-                </button>
-              </div>
-            </form>
           </div>
         </div>
       )}
