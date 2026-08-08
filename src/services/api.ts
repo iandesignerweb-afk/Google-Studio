@@ -36,6 +36,18 @@ function getApiBaseUrl(): string {
   return customUrl ? customUrl.replace(/\/$/, '') : '';
 }
 
+export async function safeJson(response: Response): Promise<any> {
+  const text = await response.text();
+  if (!text || !text.trim()) {
+    return null;
+  }
+  try {
+    return JSON.parse(text);
+  } catch (_e) {
+    return { message: text };
+  }
+}
+
 async function request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
   const token = getStoredToken();
   const headers: Record<string, string> = {
@@ -57,19 +69,8 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
     headers,
   });
 
-  const responseText = await response.text();
-  let data: any = {};
-
-  if (responseText && responseText.trim()) {
-    try {
-      data = JSON.parse(responseText);
-    } catch (_err) {
-      if (!response.ok) {
-        throw new Error(`Erro ${response.status}: ${response.statusText || 'Resposta inválida do servidor'}`);
-      }
-      data = { message: responseText };
-    }
-  }
+  const parsed = await safeJson(response);
+  const data = parsed ?? {};
 
   if (!response.ok) {
     const errorMsg =
