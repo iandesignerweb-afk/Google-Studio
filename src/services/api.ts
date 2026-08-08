@@ -241,6 +241,17 @@ export const api = {
     request<Quadra>(`/api/cartoes/${cartaoId}/quadras/${quadraId}/toggle`, {
       method: 'PATCH',
     }),
+  updateCartaoDesignacoes: async (
+    cartaoId: number,
+    data: {
+      designacoes: any[];
+      ultimaDataConcluida?: string | null;
+    }
+  ) =>
+    request<Cartao>(`/api/cartoes/${cartaoId}/designacoes`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
 
   // Dashboard & Reports & Audit
   getDashboardStats: async () => request<DashboardStats>('/api/dashboard/stats'),

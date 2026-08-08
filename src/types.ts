@@ -39,6 +39,13 @@ export interface Quadra {
   createdAt?: string;
 }
 
+export interface CartaoDesignacao {
+  id: number;
+  dirigenteNome: string;
+  dataDesignacao: string;
+  dataConclusao?: string | null;
+}
+
 export interface Cartao {
   id: number;
   titulo: string;
@@ -54,6 +61,8 @@ export interface Cartao {
   totalQuadras?: number;
   concluidasQuadras?: number;
   createdAt?: string;
+  ultimaDataConcluida?: string | null;
+  designacoes?: CartaoDesignacao[];
 }
 
 export interface QuadraHistorico {

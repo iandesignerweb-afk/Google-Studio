@@ -9,6 +9,7 @@ import { QuadrasControlView } from './components/QuadrasControlView';
 import { CartoesView } from './components/CartoesView';
 import { UsuariosView } from './components/UsuariosView';
 import { RelatoriosView } from './components/RelatoriosView';
+import { RegistroTerritoriosView } from './components/RegistroTerritoriosView';
 import { AuditoriaView } from './components/AuditoriaView';
 
 export default function App() {
@@ -94,6 +95,11 @@ export default function App() {
           title: 'Relatórios de Desempenho',
           subtitle: 'Métricas completas por usuário, município e tempo de conclusão',
         };
+      case 'registro-territorios':
+        return {
+          title: 'Registro de Designação de Território (S-13)',
+          subtitle: 'Documento oficial de controle e histórico anual de designações de territórios',
+        };
       case 'usuarios':
         return {
           title: 'Gestão de Usuários',
@@ -175,6 +181,10 @@ export default function App() {
 
           {currentTab === 'relatorios' && (
             <RelatoriosView darkMode={darkMode} />
+          )}
+
+          {currentTab === 'registro-territorios' && (
+            <RegistroTerritoriosView currentUser={currentUser} darkMode={darkMode} />
           )}
 
           {currentTab === 'usuarios' && currentUser.permissao === 'Administrador' && (

@@ -1133,6 +1133,31 @@ async function startServer() {
       const cidObj = c.cidadeId ? db.cidades.find((city) => city.id === c.cidadeId) : null;
       const baiObj = c.bairroId ? db.bairros.find((b) => b.id === c.bairroId) : null;
 
+      const completedQuadras = quadras.filter((q) => q.status === 'Feita' && q.concluidaEm);
+      let computedLastDate = c.ultimaDataConcluida || null;
+      if (!computedLastDate && completedQuadras.length > 0) {
+        const latestDateObj = completedQuadras.reduce((latest, q) => {
+          const d = new Date(q.concluidaEm!);
+          return d > latest ? d : latest;
+        }, new Date(0));
+        if (latestDateObj.getTime() > 0) {
+          computedLastDate = latestDateObj.toLocaleDateString('pt-BR');
+        }
+      }
+
+      let designacoesList = c.designacoes && Array.isArray(c.designacoes) ? [...c.designacoes] : [];
+      if (designacoesList.length === 0 && userObj) {
+        const isFullyDone = concluidasQuadras === totalQuadras && totalQuadras > 0;
+        designacoesList = [
+          {
+            id: 1,
+            dirigenteNome: userObj.nome,
+            dataDesignacao: new Date(c.createdAt || Date.now()).toLocaleDateString('pt-BR'),
+            dataConclusao: isFullyDone ? (computedLastDate || new Date().toLocaleDateString('pt-BR')) : null,
+          },
+        ];
+      }
+
       return {
         ...c,
         usuarioNome: userObj ? userObj.nome : c.usuarioNome || 'Não atribuído',
@@ -1141,6 +1166,8 @@ async function startServer() {
         quadras,
         totalQuadras,
         concluidasQuadras,
+        ultimaDataConcluida: computedLastDate,
+        designacoes: designacoesList,
       };
     });
 
@@ -1183,15 +1210,74 @@ async function startServer() {
     const cidObj = cartao.cidadeId ? db.cidades.find((city) => city.id === cartao.cidadeId) : null;
     const baiObj = cartao.bairroId ? db.bairros.find((b) => b.id === cartao.bairroId) : null;
 
+    const totalQuadras = quadras.length;
+    const concluidasQuadras = quadras.filter((q) => q.status === 'Feita').length;
+
+    const completedQuadras = quadras.filter((q) => q.status === 'Feita' && q.concluidaEm);
+    let computedLastDate = cartao.ultimaDataConcluida || null;
+    if (!computedLastDate && completedQuadras.length > 0) {
+      const latestDateObj = completedQuadras.reduce((latest, q) => {
+        const d = new Date(q.concluidaEm!);
+        return d > latest ? d : latest;
+      }, new Date(0));
+      if (latestDateObj.getTime() > 0) {
+        computedLastDate = latestDateObj.toLocaleDateString('pt-BR');
+      }
+    }
+
+    let designacoesList = cartao.designacoes && Array.isArray(cartao.designacoes) ? [...cartao.designacoes] : [];
+    if (designacoesList.length === 0 && userObj) {
+      const isFullyDone = concluidasQuadras === totalQuadras && totalQuadras > 0;
+      designacoesList = [
+        {
+          id: 1,
+          dirigenteNome: userObj.nome,
+          dataDesignacao: new Date(cartao.createdAt || Date.now()).toLocaleDateString('pt-BR'),
+          dataConclusao: isFullyDone ? (computedLastDate || new Date().toLocaleDateString('pt-BR')) : null,
+        },
+      ];
+    }
+
     return res.json({
       ...cartao,
       usuarioNome: userObj ? userObj.nome : cartao.usuarioNome || 'Não atribuído',
       cidadeNome: cidObj ? cidObj.nome : null,
       bairroNome: baiObj ? baiObj.nome : null,
       quadras,
-      totalQuadras: quadras.length,
-      concluidasQuadras: quadras.filter((q) => q.status === 'Feita').length,
+      totalQuadras,
+      concluidasQuadras,
+      ultimaDataConcluida: computedLastDate,
+      designacoes: designacoesList,
     });
+  });
+
+  app.put('/api/cartoes/:id/designacoes', authenticateToken, requireAdmin, (req: AuthRequest, res: Response) => {
+    const id = Number(req.params.id);
+    const { designacoes, ultimaDataConcluida } = req.body;
+    const db = getDB();
+    const cartao = (db.cartoes || []).find((c) => c.id === id);
+
+    if (!cartao) {
+      return res.status(404).json({ error: 'Cartão não encontrado.' });
+    }
+
+    if (Array.isArray(designacoes)) {
+      cartao.designacoes = designacoes;
+    }
+    if (ultimaDataConcluida !== undefined) {
+      cartao.ultimaDataConcluida = ultimaDataConcluida;
+    }
+
+    saveDB();
+
+    addAuditLog(
+      req.user!.id,
+      req.user!.nome,
+      'Edição Designações Território',
+      `Atualizou o registro de designações do Cartão "${cartao.titulo}".`
+    );
+
+    return res.json(cartao);
   });
 
   app.post('/api/cartoes', authenticateToken, requireAdmin, (req: AuthRequest, res: Response) => {

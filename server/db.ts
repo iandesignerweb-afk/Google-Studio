@@ -40,6 +40,13 @@ export interface QuadraDB {
   createdAt: string;
 }
 
+export interface CartaoDesignacaoDB {
+  id: number;
+  dirigenteNome: string;
+  dataDesignacao: string;
+  dataConclusao?: string | null;
+}
+
 export interface CartaoDB {
   id: number;
   titulo: string;
@@ -50,6 +57,8 @@ export interface CartaoDB {
   usuarioNome?: string | null;
   quadraIds: number[];
   createdAt: string;
+  ultimaDataConcluida?: string | null;
+  designacoes?: CartaoDesignacaoDB[];
 }
 
 export interface HistoricoDB {

@@ -13,6 +13,7 @@ import {
   Moon,
   ChevronLeft,
   MapPin,
+  FileText,
 } from 'lucide-react';
 
 export type NavItem =
@@ -20,6 +21,7 @@ export type NavItem =
   | 'quadras'
   | 'cartoes'
   | 'relatorios'
+  | 'registro-territorios'
   | 'auditoria'
   | 'usuarios';
 
@@ -71,6 +73,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
       label: 'Relatórios',
       icon: BarChart3,
       adminOnly: false,
+    },
+    {
+      id: 'registro-territorios' as NavItem,
+      label: 'Registro Territórios',
+      icon: FileText,
+      adminOnly: true,
+      badge: 'S-13',
     },
     {
       id: 'usuarios' as NavItem,
