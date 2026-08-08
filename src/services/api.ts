@@ -57,10 +57,26 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
     headers,
   });
 
-  const data = await response.json();
+  const responseText = await response.text();
+  let data: any = {};
+
+  if (responseText && responseText.trim().length > 0) {
+    try {
+      data = JSON.parse(responseText);
+    } catch (e) {
+      if (!response.ok) {
+        throw new Error(`Erro ${response.status}: ${response.statusText || 'Resposta inválida do servidor'}`);
+      }
+      data = { message: responseText };
+    }
+  }
 
   if (!response.ok) {
-    throw new Error(data.error || 'Ocorreu um erro na requisição.');
+    const errorMsg =
+      data && typeof data === 'object' && data.error
+        ? data.error
+        : `Erro ${response.status}: ${response.statusText || 'Ocorreu um erro na requisição.'}`;
+    throw new Error(errorMsg);
   }
 
   return data as T;
