@@ -4,10 +4,10 @@
 -- ====================================================================
 
 -- Default Users (Pass: admin123 and user123 hashed with bcrypt)
-INSERT INTO public.users (id, nome, usuario, senha_hash, permissao)
+INSERT INTO public.users (id, nome, usuario, email, senha_hash, permissao)
 VALUES
-  (1, 'Administrador do Sistema', 'admin', '$2a$10$wTIn6eNq3cO3uS1pLhI2eeE8bN.O0I.C8L/E8mZqQ2V1Y4L5K6J7i', 'Administrador'),
-  (2, 'Carlos Silva', 'carlos', '$2a$10$wTIn6eNq3cO3uS1pLhI2eeE8bN.O0I.C8L/E8mZqQ2V1Y4L5K6J7i', 'Usuário comum')
+  (1, 'Administrador do Sistema', 'admin', 'admin@quadras.com', '$2a$10$wTIn6eNq3cO3uS1pLhI2eeE8bN.O0I.C8L/E8mZqQ2V1Y4L5K6J7i', 'Administrador'),
+  (2, 'Carlos Silva', 'carlos', 'carlos@quadras.com', '$2a$10$wTIn6eNq3cO3uS1pLhI2eeE8bN.O0I.C8L/E8mZqQ2V1Y4L5K6J7i', 'Usuário comum')
 ON CONFLICT (usuario) DO NOTHING;
 
 -- Default Cidades
