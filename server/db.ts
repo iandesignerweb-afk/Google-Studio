@@ -1,9 +1,5 @@
-import fs from 'fs';
-import path from 'path';
 import bcrypt from 'bcryptjs';
-
-const DATA_DIR = path.join(process.cwd(), 'data');
-const DB_FILE = path.join(DATA_DIR, 'db.json');
+import { supabaseServer, isSupabaseServerConfigured } from './supabaseServer.js';
 
 export interface UserDB {
   id: number;
@@ -105,42 +101,12 @@ let dbData: SchemaDB | null = null;
 
 export function getDB(): SchemaDB {
   if (dbData) return dbData;
-
-  if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-  }
-
-  if (fs.existsSync(DB_FILE)) {
-    try {
-      const content = fs.readFileSync(DB_FILE, 'utf-8');
-      dbData = JSON.parse(content);
-
-      // Ensure backward compatibility for cartoes
-      if (!dbData!.cartoes) {
-        dbData!.cartoes = [];
-      }
-      if (!dbData!.counters.cartaoId) {
-        dbData!.counters.cartaoId = 1;
-      }
-
-      return dbData!;
-    } catch (e) {
-      console.error('Erro ao ler banco de dados, recriando inicial...', e);
-    }
-  }
-
-  // Seed default data
   dbData = seedDefaultDB();
-  saveDB();
-  return dbData!;
+  return dbData;
 }
 
 export function saveDB() {
-  if (!dbData) return;
-  if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-  }
-  fs.writeFileSync(DB_FILE, JSON.stringify(dbData, null, 2), 'utf-8');
+  // In-memory update. No disk/data/db.json writing!
 }
 
 function seedDefaultDB(): SchemaDB {
@@ -244,6 +210,22 @@ export function addAuditLog(
     ip,
     dataHora: new Date().toISOString(),
   };
-  db.auditLogs.unshift(log); // newest first
-  saveDB();
+  db.auditLogs.unshift(log);
+
+  // If Supabase is configured, record audit log asynchronously in Supabase as well
+  if (isSupabaseServerConfigured && supabaseServer) {
+    supabaseServer
+      .from('audit_logs')
+      .insert({
+        usuario_id: usuarioId,
+        usuario_nome: usuarioNome,
+        acao,
+        detalhes,
+        ip,
+        data_hora: new Date().toISOString(),
+      })
+      .then(({ error }) => {
+        if (error) console.error('Error inserting audit log into Supabase:', error.message);
+      });
+  }
 }

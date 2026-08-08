@@ -82,6 +82,28 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
     setError(null);
 
     try {
+      if (isSupabaseConfigured && supabase) {
+        const inputEmail = usuario.includes('@')
+          ? usuario.trim()
+          : `${usuario.trim().toLowerCase()}@quadras.com`;
+
+        const { data, error: sbError } = await supabase.auth.signInWithPassword({
+          email: inputEmail,
+          password: senha.trim(),
+        });
+
+        if (!sbError && data?.session) {
+          localStorage.setItem('quadras_auth_token', data.session.access_token);
+          try {
+            const userRes = await api.getMe();
+            onLoginSuccess(userRes);
+            return;
+          } catch (meErr) {
+            console.warn('getMe note after Supabase Auth:', meErr);
+          }
+        }
+      }
+
       const res = await api.login(usuario.trim(), senha.trim());
       onLoginSuccess(res.user);
     } catch (err: any) {
