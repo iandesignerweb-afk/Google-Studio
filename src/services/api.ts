@@ -60,10 +60,10 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
   const responseText = await response.text();
   let data: any = {};
 
-  if (responseText && responseText.trim().length > 0) {
+  if (responseText && responseText.trim()) {
     try {
       data = JSON.parse(responseText);
-    } catch (e) {
+    } catch (_err) {
       if (!response.ok) {
         throw new Error(`Erro ${response.status}: ${response.statusText || 'Resposta inválida do servidor'}`);
       }
