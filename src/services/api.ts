@@ -24,6 +24,18 @@ export function clearStoredToken() {
   localStorage.removeItem(TOKEN_KEY);
 }
 
+function getApiBaseUrl(): string {
+  const metaEnv = (import.meta as any).env || {};
+  const procEnv = typeof process !== 'undefined' && process.env ? process.env : {};
+  const customUrl =
+    metaEnv.VITE_API_URL ||
+    metaEnv.NEXT_PUBLIC_API_URL ||
+    procEnv.VITE_API_URL ||
+    procEnv.NEXT_PUBLIC_API_URL ||
+    '';
+  return customUrl ? customUrl.replace(/\/$/, '') : '';
+}
+
 async function request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
   const token = getStoredToken();
   const headers: Record<string, string> = {
@@ -35,7 +47,12 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
     headers['Authorization'] = `Bearer ${token}`;
   }
 
-  const response = await fetch(endpoint, {
+  const baseUrl = getApiBaseUrl();
+  const url = baseUrl
+    ? `${baseUrl}${endpoint.startsWith('/') ? endpoint : '/' + endpoint}`
+    : endpoint;
+
+  const response = await fetch(url, {
     ...options,
     headers,
   });
