@@ -33,7 +33,30 @@ function getApiBaseUrl(): string {
     procEnv.VITE_API_URL ||
     procEnv.NEXT_PUBLIC_API_URL ||
     '';
-  return customUrl ? customUrl.replace(/\/$/, '') : '';
+
+  if (!customUrl) return '';
+
+  if (typeof window !== 'undefined') {
+    try {
+      const parsed = new URL(customUrl);
+      if (parsed.origin === window.location.origin) {
+        return '';
+      }
+    } catch (_e) {
+      return '';
+    }
+
+    // In local development, Cloud Run containers, or same-origin hosts, relative URLs work directly
+    if (
+      window.location.hostname.includes('run.app') ||
+      window.location.hostname.includes('localhost') ||
+      window.location.hostname.includes('127.0.0.1')
+    ) {
+      return '';
+    }
+  }
+
+  return customUrl.replace(/\/$/, '');
 }
 
 export async function safeJson(response: Response): Promise<any> {
@@ -64,13 +87,35 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
     ? `${baseUrl}${endpoint.startsWith('/') ? endpoint : '/' + endpoint}`
     : endpoint;
 
-  const response = await fetch(url, {
-    ...options,
-    headers,
-  });
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      ...options,
+      headers,
+    });
+  } catch (err: any) {
+    console.error("Erro de requisição/conexão ao servidor:", err);
+    throw new Error('Não foi possível conectar ao servidor backend. Verifique a conexão com a internet ou as rotas de API.');
+  }
 
-  const parsed = await safeJson(response);
-  const data = parsed ?? {};
+  const responseText = await response.text();
+
+  if (!responseText || !responseText.trim()) {
+    if (!response.ok) {
+      throw new Error(`O servidor retornou uma resposta vazia (Status: ${response.status})`);
+    }
+    return {} as T;
+  }
+
+  let data: any;
+  try {
+    data = JSON.parse(responseText);
+  } catch (_e) {
+    if (!response.ok) {
+      throw new Error(`Erro ${response.status}: ${response.statusText || 'Resposta em formato inválido'}`);
+    }
+    data = { message: responseText };
+  }
 
   if (!response.ok) {
     const errorMsg =
