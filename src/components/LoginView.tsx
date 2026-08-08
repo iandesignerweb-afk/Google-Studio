@@ -70,7 +70,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
     }
   }, [onLoginSuccess]);
 
-  // Traditional Login
+  // Traditional Login via Supabase Auth
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!usuario.trim() || !senha.trim()) {
@@ -83,9 +83,22 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
 
     try {
       if (isSupabaseConfigured && supabase) {
-        const inputEmail = usuario.includes('@')
-          ? usuario.trim()
-          : `${usuario.trim().toLowerCase()}@quadras.com`;
+        let inputEmail = usuario.trim();
+
+        // Se o usuário digitou o nome de usuário em vez de e-mail com '@'
+        if (!inputEmail.includes('@')) {
+          const { data: profile } = await supabase
+            .from('users')
+            .select('email')
+            .ilike('usuario', inputEmail)
+            .maybeSingle();
+
+          if (profile && profile.email) {
+            inputEmail = profile.email;
+          } else {
+            inputEmail = `${inputEmail.toLowerCase()}@quadras.com`;
+          }
+        }
 
         const { data, error: sbError } = await supabase.auth.signInWithPassword({
           email: inputEmail,
@@ -94,16 +107,13 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
 
         if (!sbError && data?.session) {
           localStorage.setItem('quadras_auth_token', data.session.access_token);
-          try {
-            const userRes = await api.getMe();
-            onLoginSuccess(userRes);
-            return;
-          } catch (meErr) {
-            console.warn('getMe note after Supabase Auth:', meErr);
-          }
+          const userRes = await api.getMe();
+          onLoginSuccess(userRes);
+          return;
         }
       }
 
+      // Se a chamada via SDK client não for suficiente ou falhar, faz login via API (que usa Supabase Auth no servidor)
       const res = await api.login(usuario.trim(), senha.trim());
       onLoginSuccess(res.user);
     } catch (err: any) {
