@@ -32,7 +32,7 @@ export const UsuariosView: React.FC<UsuariosViewProps> = ({
   const [nome, setNome] = useState('');
   const [usuario, setUsuario] = useState('');
   const [senha, setSenha] = useState('');
-  const [permissao, setPermissao] = useState<UserRole>('Usuário comum');
+  const [permissao, setPermissao] = useState<UserRole>('Dirigente');
 
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -60,7 +60,7 @@ export const UsuariosView: React.FC<UsuariosViewProps> = ({
     setNome('');
     setUsuario('');
     setSenha('');
-    setPermissao('Usuário comum');
+    setPermissao('Dirigente');
     setError(null);
     setShowModal(true);
   };
@@ -343,7 +343,7 @@ export const UsuariosView: React.FC<UsuariosViewProps> = ({
                       : 'bg-slate-50 border-slate-200 text-slate-900'
                   }`}
                 >
-                  <option value="Usuário comum">Usuário comum</option>
+                  <option value="Dirigente">Dirigente</option>
                   <option value="Administrador">Administrador</option>
                 </select>
               </div>

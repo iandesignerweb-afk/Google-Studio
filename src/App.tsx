@@ -6,7 +6,6 @@ import { Header } from './components/Header';
 import { LoginView } from './components/LoginView';
 import { DashboardView } from './components/DashboardView';
 import { QuadrasControlView } from './components/QuadrasControlView';
-import { CidadesBairrosView } from './components/CidadesBairrosView';
 import { CartoesView } from './components/CartoesView';
 import { UsuariosView } from './components/UsuariosView';
 import { RelatoriosView } from './components/RelatoriosView';
@@ -87,13 +86,8 @@ export default function App() {
         };
       case 'cartoes':
         return {
-          title: 'Cartões de Visita',
+          title: 'Cartões',
           subtitle: 'Cartões com grupos de quadras vinculadas e designados por usuário',
-        };
-      case 'cidades':
-        return {
-          title: 'Gestão de Bairros e Quadras',
-          subtitle: 'Cadastre bairros e adicione quadras para acompanhamento',
         };
       case 'relatorios':
         return {
@@ -174,13 +168,6 @@ export default function App() {
 
           {currentTab === 'cartoes' && (
             <CartoesView
-              currentUser={currentUser}
-              darkMode={darkMode}
-            />
-          )}
-
-          {currentTab === 'cidades' && (
-            <CidadesBairrosView
               currentUser={currentUser}
               darkMode={darkMode}
             />

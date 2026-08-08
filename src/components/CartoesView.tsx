@@ -21,6 +21,7 @@ import {
   Layers,
   Sparkles,
   Filter,
+  Grid3x3,
 } from 'lucide-react';
 
 interface CartoesViewProps {
@@ -54,8 +55,21 @@ export const CartoesView: React.FC<CartoesViewProps> = ({
   const [formTitulo, setFormTitulo] = useState('');
   const [formDescricao, setFormDescricao] = useState('');
   const [formCidadeId, setFormCidadeId] = useState<string>('');
+  const [formCidadeNome, setFormCidadeNome] = useState('');
   const [formBairroId, setFormBairroId] = useState<string>('');
+  const [formBairroNome, setFormBairroNome] = useState('');
+  const [formQuadrasInicio, setFormQuadrasInicio] = useState('');
+  const [formQuadrasFim, setFormQuadrasFim] = useState('');
   const [selectedQuadraIds, setSelectedQuadraIds] = useState<number[]>([]);
+
+  // Add Quadras to existing Cartao Modal State
+  const [addingQuadraCartao, setAddingQuadraCartao] = useState<Cartao | null>(null);
+  const [addQuadraMode, setAddQuadraMode] = useState<'single' | 'range'>('single');
+  const [addQuadraNumero, setAddQuadraNumero] = useState('');
+  const [addQuadraInicio, setAddQuadraInicio] = useState('1');
+  const [addQuadraFim, setAddQuadraFim] = useState('10');
+  const [savingNewQuadras, setSavingNewQuadras] = useState(false);
+  const [addQuadraError, setAddQuadraError] = useState<string | null>(null);
   
   // Modal Quadra Picker Filter
   const [pickerCidadeId, setPickerCidadeId] = useState<string>('');
@@ -129,11 +143,16 @@ export const CartoesView: React.FC<CartoesViewProps> = ({
   // Open Create Modal
   const handleOpenCreateModal = () => {
     const defaultCidadeId = cidades[0] ? String(cidades[0].id) : '';
+    const defaultCidadeNome = cidades[0] ? cidades[0].nome : 'Canapi';
     setEditingCartao(null);
     setFormTitulo('');
     setFormDescricao('');
     setFormCidadeId(defaultCidadeId);
+    setFormCidadeNome(defaultCidadeNome);
     setFormBairroId('');
+    setFormBairroNome('');
+    setFormQuadrasInicio('1');
+    setFormQuadrasFim('10');
     setSelectedQuadraIds([]);
     setPickerCidadeId(defaultCidadeId);
     setPickerBairroId('');
@@ -149,13 +168,68 @@ export const CartoesView: React.FC<CartoesViewProps> = ({
     setFormTitulo(c.titulo || '');
     setFormDescricao(c.descricao || '');
     setFormCidadeId(defaultCidadeId);
+    setFormCidadeNome(c.cidadeNome || (cidades[0] ? cidades[0].nome : ''));
     setFormBairroId(c.bairroId ? String(c.bairroId) : '');
+    setFormBairroNome(c.bairroNome || '');
+    setFormQuadrasInicio('');
+    setFormQuadrasFim('');
     setSelectedQuadraIds(c.quadraIds || []);
     setPickerCidadeId(defaultCidadeId);
     setPickerBairroId(c.bairroId ? String(c.bairroId) : '');
     setPickerSearchNum('');
     setModalError(null);
     setShowModal(true);
+  };
+
+  // Open Add Quadras to Cartao Modal
+  const handleOpenAddQuadrasModal = (c: Cartao) => {
+    setAddingQuadraCartao(c);
+    setAddQuadraMode('range');
+    setAddQuadraNumero('');
+    setAddQuadraInicio('1');
+    setAddQuadraFim('10');
+    setAddQuadraError(null);
+  };
+
+  // Save New Quadras for Cartao
+  const handleSaveNewQuadrasForCartao = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!addingQuadraCartao) return;
+
+    setSavingNewQuadras(true);
+    setAddQuadraError(null);
+
+    try {
+      if (addQuadraMode === 'single') {
+        if (!addQuadraNumero.trim()) {
+          setAddQuadraError('Informe o número da quadra (ex: 01).');
+          setSavingNewQuadras(false);
+          return;
+        }
+        await api.createQuadrasParaCartao(addingQuadraCartao.id, {
+          numero: addQuadraNumero.trim(),
+        });
+      } else {
+        const start = Number(addQuadraInicio);
+        const end = Number(addQuadraFim);
+        if (isNaN(start) || isNaN(end) || start > end) {
+          setAddQuadraError('Insira um intervalo numérico válido (ex: 1 a 10).');
+          setSavingNewQuadras(false);
+          return;
+        }
+        await api.createQuadrasParaCartao(addingQuadraCartao.id, {
+          inicio: start,
+          fim: end,
+        });
+      }
+
+      setAddingQuadraCartao(null);
+      await loadData();
+    } catch (err: any) {
+      setAddQuadraError(err.message || 'Erro ao criar quadras para este cartão.');
+    } finally {
+      setSavingNewQuadras(false);
+    }
   };
 
   // Open Dedicated Assignment Modal
@@ -191,7 +265,7 @@ export const CartoesView: React.FC<CartoesViewProps> = ({
   const handleSaveCartao = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!formTitulo.trim()) {
-      setModalError('Informe o título do cartão (ex: Cartão 01).');
+      setModalError('Informe o nome do cartão (ex: Cartão 01).');
       return;
     }
 
@@ -199,13 +273,20 @@ export const CartoesView: React.FC<CartoesViewProps> = ({
     setModalError(null);
 
     try {
-      const payload = {
+      const payload: any = {
         titulo: formTitulo.trim(),
         descricao: formDescricao.trim(),
         cidadeId: formCidadeId ? Number(formCidadeId) : null,
+        cidadeNome: formCidadeNome.trim(),
         bairroId: formBairroId ? Number(formBairroId) : null,
+        bairroNome: formBairroNome.trim(),
         quadraIds: selectedQuadraIds,
       };
+
+      if (!editingCartao && formQuadrasInicio && formQuadrasFim) {
+        payload.quadrasIniciaisInicio = Number(formQuadrasInicio);
+        payload.quadrasIniciaisFim = Number(formQuadrasFim);
+      }
 
       if (editingCartao) {
         await api.updateCartao(editingCartao.id, payload);
@@ -363,7 +444,7 @@ export const CartoesView: React.FC<CartoesViewProps> = ({
             <CreditCard className="w-6 h-6" />
           </div>
           <div>
-            <h1 className="text-lg font-bold tracking-tight">Cartões de Visita</h1>
+            <h1 className="text-lg font-bold tracking-tight">Cartões</h1>
             <p className="text-xs text-slate-400">
               {isAdmin
                 ? 'Gerencie cartões, vincule quadras e atribua responsáveis'
@@ -518,6 +599,14 @@ export const CartoesView: React.FC<CartoesViewProps> = ({
                   <div className="flex items-center gap-3 shrink-0 self-end md:self-auto">
                     {isAdmin && (
                       <div className="flex items-center gap-1.5 border-r border-slate-700/50 pr-3">
+                        <button
+                          onClick={() => handleOpenAddQuadrasModal(cartao)}
+                          title="Criar e Vincular Quadras a este Cartão"
+                          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 hover:bg-emerald-500/20 transition-all cursor-pointer"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                          <span className="hidden sm:inline">Criar Quadras</span>
+                        </button>
                         <button
                           onClick={() => handleOpenAssignModal(cartao)}
                           title="Designar Usuário"
@@ -732,14 +821,14 @@ export const CartoesView: React.FC<CartoesViewProps> = ({
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="sm:col-span-2 space-y-1">
                   <label className="text-xs font-semibold text-slate-300">
-                    Título do Cartão <span className="text-rose-400">*</span>
+                    Nome do cartão <span className="text-rose-400">*</span>
                   </label>
                   <input
                     type="text"
                     required
                     value={formTitulo}
                     onChange={(e) => setFormTitulo(e.target.value)}
-                    placeholder="Ex: Cartão 01, Cartão Centro Canapi"
+                    placeholder="Ex: Cartão 01"
                     className={`w-full px-3.5 py-2.5 rounded-xl text-xs border outline-none ${
                       darkMode
                         ? 'bg-slate-800 border-slate-700 text-slate-100 focus:border-emerald-500'
@@ -750,7 +839,7 @@ export const CartoesView: React.FC<CartoesViewProps> = ({
 
                 <div className="sm:col-span-2 space-y-1">
                   <label className="text-xs font-semibold text-slate-300">
-                    Descrição do Cartão (Opcional)
+                    Descrição do cartão (Opcional)
                   </label>
                   <input
                     type="text"
@@ -765,150 +854,80 @@ export const CartoesView: React.FC<CartoesViewProps> = ({
                   />
                 </div>
 
-                <div className="sm:col-span-2 space-y-1">
+                <div className="space-y-1">
                   <label className="text-xs font-semibold text-slate-300">
-                    Cidade principal (Referência)
+                    Cidade principal (Preenchimento Automático)
                   </label>
-                  <select
-                    value={formCidadeId || (cidades[0] ? String(cidades[0].id) : '')}
-                    onChange={(e) => {
-                      setFormCidadeId(e.target.value);
-                      setPickerCidadeId(e.target.value);
-                      setFormBairroId('');
-                      setPickerBairroId('');
-                    }}
+                  <input
+                    type="text"
+                    value={formCidadeNome || (cidades[0] ? cidades[0].nome : 'Canapi')}
+                    onChange={(e) => setFormCidadeNome(e.target.value)}
+                    placeholder="Ex: Canapi"
                     className={`w-full px-3.5 py-2.5 rounded-xl text-xs border outline-none ${
                       darkMode
                         ? 'bg-slate-800 border-slate-700 text-slate-100 focus:border-emerald-500'
                         : 'bg-slate-50 border-slate-200 text-slate-900 focus:border-emerald-500'
                     }`}
-                  >
-                    {cidades.length > 0 ? (
-                      cidades.map((c) => (
-                        <option key={c.id} value={c.id}>
-                          {c.nome}
-                        </option>
-                      ))
-                    ) : (
-                      <option value="">Nenhuma cidade cadastrada</option>
-                    )}
-                  </select>
-                </div>
-              </div>
-
-              {/* Quadras Multi-Selector Section */}
-              <div className="pt-2 border-t border-slate-200/10 space-y-3">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <Layers className="w-4 h-4 text-emerald-400" />
-                      <h4 className="text-xs font-bold uppercase tracking-wider text-slate-300">
-                        Vincular Quadras ({selectedQuadraIds.length} Selecionadas)
-                      </h4>
-                    </div>
-                    <p className="text-[11px] text-slate-400 mt-0.5">
-                      Quadras já vinculadas a outros cartões são ocultadas automaticamente (relação de exclusividade).
-                    </p>
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={selectAllFilteredQuadras}
-                      className="px-2.5 py-1 bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 rounded-lg text-[11px] font-semibold transition-colors"
-                    >
-                      Selecionar Visíveis
-                    </button>
-                    <button
-                      type="button"
-                      onClick={deselectAllFilteredQuadras}
-                      className="px-2.5 py-1 bg-slate-800 text-slate-400 hover:bg-slate-700 rounded-lg text-[11px] font-semibold transition-colors"
-                    >
-                      Desmarcar Visíveis
-                    </button>
-                  </div>
-                </div>
-
-                {/* Filter for Picker */}
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 p-3 bg-slate-800/40 rounded-xl border border-slate-700/50">
-                  <select
-                    value={pickerCidadeId || (cidades[0] ? String(cidades[0].id) : '')}
-                    onChange={(e) => {
-                      setPickerCidadeId(e.target.value);
-                      setPickerBairroId('');
-                    }}
-                    className="px-2.5 py-1.5 rounded-lg text-xs bg-slate-800 border border-slate-700 text-slate-200 outline-none"
-                  >
-                    {cidades.length > 0 ? (
-                      cidades.map((c) => (
-                        <option key={c.id} value={c.id}>
-                          Cidade: {c.nome}
-                        </option>
-                      ))
-                    ) : (
-                      <option value="">Nenhuma cidade</option>
-                    )}
-                  </select>
-
-                  <select
-                    value={pickerBairroId}
-                    onChange={(e) => setPickerBairroId(e.target.value)}
-                    className="px-2.5 py-1.5 rounded-lg text-xs bg-slate-800 border border-slate-700 text-slate-200 outline-none"
-                  >
-                    <option value="">Filtrar por Bairro</option>
-                    {bairros
-                      .filter(
-                        (b) =>
-                          !pickerCidadeId || b.cidadeId === Number(pickerCidadeId)
-                      )
-                      .map((b) => (
-                        <option key={b.id} value={b.id}>
-                          {b.nome} ({b.cidadeNome})
-                        </option>
-                      ))}
-                  </select>
-
-                  <input
-                    type="text"
-                    value={pickerSearchNum}
-                    onChange={(e) => setPickerSearchNum(e.target.value)}
-                    placeholder="Número da quadra..."
-                    className="px-2.5 py-1.5 rounded-lg text-xs bg-slate-800 border border-slate-700 text-slate-200 outline-none"
                   />
                 </div>
 
-                {/* Grid of Quadras to select */}
-                <div className="max-h-60 overflow-y-auto p-2 bg-slate-950/50 rounded-xl border border-slate-800 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
-                  {filteredPickerQuadras.length === 0 ? (
-                    <div className="col-span-full py-8 text-center text-xs text-slate-500">
-                      Nenhuma quadra encontrada com os filtros selecionados.
-                    </div>
-                  ) : (
-                    filteredPickerQuadras.map((q) => {
-                      const isSelected = selectedQuadraIds.includes(q.id);
-                      return (
-                        <button
-                          key={q.id}
-                          type="button"
-                          onClick={() => toggleSelectQuadraInModal(q.id)}
-                          className={`p-2 rounded-lg text-left text-xs border transition-all flex items-center justify-between cursor-pointer ${
-                            isSelected
-                              ? 'bg-emerald-600 text-white border-emerald-500 font-bold shadow-sm'
-                              : 'bg-slate-900 border-slate-800 text-slate-300 hover:border-slate-700'
-                          }`}
-                        >
-                          <div className="truncate pr-1">
-                            <div>Quadra {q.numero}</div>
-                            <div className="text-[10px] opacity-70 truncate">
-                              {q.bairroNome}
-                            </div>
-                          </div>
-                          {isSelected && <Check className="w-4 h-4 shrink-0" />}
-                        </button>
-                      );
-                    })
-                  )}
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-slate-300">
+                    Bairro (Campo de preenchimento)
+                  </label>
+                  <input
+                    type="text"
+                    value={formBairroNome}
+                    onChange={(e) => setFormBairroNome(e.target.value)}
+                    placeholder="Ex: Centro, Alto do Cruzeiro"
+                    className={`w-full px-3.5 py-2.5 rounded-xl text-xs border outline-none ${
+                      darkMode
+                        ? 'bg-slate-800 border-slate-700 text-slate-100 focus:border-emerald-500'
+                        : 'bg-slate-50 border-slate-200 text-slate-900 focus:border-emerald-500'
+                    }`}
+                  />
                 </div>
+
+                {!editingCartao && (
+                  <div className="sm:col-span-2 pt-2 border-t border-slate-800/80 space-y-2">
+                    <label className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
+                      <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>Gerar Quadras Iniciais para este Cartão (Opcional)</span>
+                    </label>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <span className="text-[11px] text-slate-400 block mb-1">Quadra Inicial</span>
+                        <input
+                          type="number"
+                          min="1"
+                          value={formQuadrasInicio}
+                          onChange={(e) => setFormQuadrasInicio(e.target.value)}
+                          placeholder="Ex: 1"
+                          className={`w-full px-3.5 py-2.5 rounded-xl text-xs border outline-none ${
+                            darkMode
+                              ? 'bg-slate-800 border-slate-700 text-slate-100 focus:border-emerald-500'
+                              : 'bg-slate-50 border-slate-200 text-slate-900 focus:border-emerald-500'
+                          }`}
+                        />
+                      </div>
+                      <div>
+                        <span className="text-[11px] text-slate-400 block mb-1">Quadra Final</span>
+                        <input
+                          type="number"
+                          min="1"
+                          value={formQuadrasFim}
+                          onChange={(e) => setFormQuadrasFim(e.target.value)}
+                          placeholder="Ex: 10"
+                          className={`w-full px-3.5 py-2.5 rounded-xl text-xs border outline-none ${
+                            darkMode
+                              ? 'bg-slate-800 border-slate-700 text-slate-100 focus:border-emerald-500'
+                              : 'bg-slate-50 border-slate-200 text-slate-900 focus:border-emerald-500'
+                          }`}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Modal Buttons */}
@@ -1069,6 +1088,154 @@ export const CartoesView: React.FC<CartoesViewProps> = ({
                     <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
                   )}
                   <span>Atribuir Usuário</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+      {/* Modal for Creating Quadras specifically for a Cartão */}
+      {addingQuadraCartao && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-sm animate-fade-in">
+          <div
+            className={`w-full max-w-md p-6 rounded-2xl border shadow-2xl space-y-4 ${
+              darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'
+            }`}
+          >
+            <div className="flex items-center justify-between pb-3 border-b border-slate-200/10">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 flex items-center justify-center">
+                  <Grid3x3 className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold">Criar Quadras para o Cartão</h3>
+                  <p className="text-[11px] text-slate-400">
+                    Cartão: <strong className="text-emerald-400">{addingQuadraCartao.titulo}</strong>
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setAddingQuadraCartao(null)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveNewQuadrasForCartao} className="space-y-4">
+              {addQuadraError && (
+                <div className="p-3 bg-rose-500/10 border border-rose-500/30 text-rose-400 text-xs rounded-xl flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>{addQuadraError}</span>
+                </div>
+              )}
+
+              {/* Selection Mode: Range or Single */}
+              <div className="flex items-center gap-2 p-1 bg-slate-800/60 rounded-xl border border-slate-700/50">
+                <button
+                  type="button"
+                  onClick={() => setAddQuadraMode('range')}
+                  className={`flex-1 py-1.5 text-xs font-semibold rounded-lg transition-all ${
+                    addQuadraMode === 'range'
+                      ? 'bg-emerald-600 text-white shadow-sm'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  Intervalo (ex: 1 a 10)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAddQuadraMode('single')}
+                  className={`flex-1 py-1.5 text-xs font-semibold rounded-lg transition-all ${
+                    addQuadraMode === 'single'
+                      ? 'bg-emerald-600 text-white shadow-sm'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  Quadra Única (ex: 01)
+                </button>
+              </div>
+
+              {addQuadraMode === 'range' ? (
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <label className="text-xs font-semibold text-slate-300">
+                      Quadra Inicial
+                    </label>
+                    <input
+                      type="number"
+                      required
+                      min="1"
+                      value={addQuadraInicio}
+                      onChange={(e) => setAddQuadraInicio(e.target.value)}
+                      placeholder="Ex: 1"
+                      className={`w-full px-3.5 py-2.5 rounded-xl text-xs border outline-none ${
+                        darkMode
+                          ? 'bg-slate-800 border-slate-700 text-slate-100 focus:border-emerald-500'
+                          : 'bg-slate-50 border-slate-200 text-slate-900 focus:border-emerald-500'
+                      }`}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-semibold text-slate-300">
+                      Quadra Final
+                    </label>
+                    <input
+                      type="number"
+                      required
+                      min="1"
+                      value={addQuadraFim}
+                      onChange={(e) => setAddQuadraFim(e.target.value)}
+                      placeholder="Ex: 10"
+                      className={`w-full px-3.5 py-2.5 rounded-xl text-xs border outline-none ${
+                        darkMode
+                          ? 'bg-slate-800 border-slate-700 text-slate-100 focus:border-emerald-500'
+                          : 'bg-slate-50 border-slate-200 text-slate-900 focus:border-emerald-500'
+                      }`}
+                    />
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-slate-300">
+                    Número da Quadra
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={addQuadraNumero}
+                    onChange={(e) => setAddQuadraNumero(e.target.value)}
+                    placeholder="Ex: 01, 02A, 15"
+                    className={`w-full px-3.5 py-2.5 rounded-xl text-xs border outline-none ${
+                      darkMode
+                        ? 'bg-slate-800 border-slate-700 text-slate-100 focus:border-emerald-500'
+                        : 'bg-slate-50 border-slate-200 text-slate-900 focus:border-emerald-500'
+                    }`}
+                  />
+                </div>
+              )}
+
+              <p className="text-[11px] text-slate-400">
+                As quadras criadas utilizarão automaticamente a cidade e o bairro associados a este cartão.
+              </p>
+
+              <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-200/10">
+                <button
+                  type="button"
+                  onClick={() => setAddingQuadraCartao(null)}
+                  className="px-4 py-2 bg-slate-800 text-slate-300 rounded-xl text-xs font-semibold hover:bg-slate-700"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={savingNewQuadras}
+                  className="px-5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-semibold flex items-center gap-2 transition-all shadow-md shadow-emerald-900/20 disabled:opacity-50"
+                >
+                  {savingNewQuadras && (
+                    <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  )}
+                  <span>Criar e Vincular</span>
                 </button>
               </div>
             </form>

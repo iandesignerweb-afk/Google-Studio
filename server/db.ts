@@ -11,7 +11,7 @@ export interface UserDB {
   usuario: string;
   email?: string;
   senhaHash: string;
-  permissao: 'Administrador' | 'Usuário comum';
+  permissao: 'Administrador' | 'Dirigente' | 'Usuário comum';
   createdAt: string;
 }
 
@@ -157,7 +157,7 @@ function seedDefaultDB(): SchemaDB {
       usuario: 'carlos',
       email: 'carlos@quadras.com',
       senhaHash: userHash,
-      permissao: 'Usuário comum',
+      permissao: 'Dirigente',
       createdAt: now,
     },
     {
@@ -166,7 +166,7 @@ function seedDefaultDB(): SchemaDB {
       usuario: 'ana',
       email: 'ana@quadras.com',
       senhaHash: userHash,
-      permissao: 'Usuário comum',
+      permissao: 'Dirigente',
       createdAt: now,
     },
     {
@@ -174,7 +174,7 @@ function seedDefaultDB(): SchemaDB {
       nome: 'Marcos Oliveira',
       usuario: 'marcos',
       senhaHash: userHash,
-      permissao: 'Usuário comum',
+      permissao: 'Dirigente',
       createdAt: now,
     },
   ];

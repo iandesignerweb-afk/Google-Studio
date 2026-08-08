@@ -289,123 +289,6 @@ export const QuadrasControlView: React.FC<QuadrasControlViewProps> = ({
       {/* --------------------------------------------------------------- */}
       {!selectedBairro ? (
         <div className="space-y-6">
-          {/* Top Panel - Bairros List Header */}
-          <div
-            className={`p-5 rounded-2xl border transition-colors shadow-sm ${
-              darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'
-            }`}
-          >
-            <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-4 pb-4 border-b border-slate-200/10">
-              <div className="flex items-center gap-3">
-                <div className="p-3 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-500">
-                  <Building2 className="w-6 h-6" />
-                </div>
-                <div>
-                  <h2 className="text-lg font-bold">Seleção de Bairro</h2>
-                  <p className="text-xs text-slate-400">
-                    Selecione um bairro abaixo para visualizar as quadras e acompanhar o progresso
-                  </p>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2">
-                {isAdmin && (
-                  <button
-                    onClick={handleOpenAddQuadra}
-                    className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl shadow-md transition-all flex items-center gap-2 cursor-pointer"
-                  >
-                    <PlusCircle className="w-4 h-4" />
-                    Cadastrar Quadra
-                  </button>
-                )}
-              </div>
-            </div>
-
-            {/* Bairro Search & Filter Bar */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              {/* 1. Cidade Filter Dropdown */}
-              <div>
-                <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-1 flex items-center gap-1">
-                  <Building2 className="w-3.5 h-3.5 text-emerald-500" /> Cidade
-                </label>
-                <select
-                  value={selectedCidade}
-                  onChange={(e) => setSelectedCidade(e.target.value)}
-                  className={`w-full px-3 py-2 rounded-xl text-xs font-semibold border ${
-                    darkMode
-                      ? 'bg-slate-800 border-slate-700 text-white'
-                      : 'bg-slate-50 border-slate-200 text-slate-900'
-                  } focus:outline-none focus:ring-2 focus:ring-emerald-500`}
-                >
-                  <option value="">Todas as Cidades ({cidades.length})</option>
-                  {cidades.map((c) => (
-                    <option key={c.id} value={String(c.id)}>
-                      {c.nome}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              {/* 2. Seleção de Bairro Dropdown */}
-              <div>
-                <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-1 flex items-center gap-1">
-                  <MapPin className="w-3.5 h-3.5 text-emerald-500" /> Seleção de Bairro
-                </label>
-                <select
-                  value={selectedBairro}
-                  onChange={(e) => setSelectedBairro(e.target.value)}
-                  className={`w-full px-3 py-2 rounded-xl text-xs font-semibold border ${
-                    darkMode
-                      ? 'bg-slate-800 border-slate-700 text-white'
-                      : 'bg-slate-50 border-slate-200 text-slate-900'
-                  } focus:outline-none focus:ring-2 focus:ring-emerald-500`}
-                >
-                  <option value="">Todos os Bairros (Lista)</option>
-                  {bairros
-                    .filter((b) => (selectedCidade ? String(b.cidadeId) === selectedCidade : true))
-                    .map((b) => (
-                      <option key={b.id} value={String(b.id)}>
-                        {b.nome} {b.cidadeNome ? `(${b.cidadeNome})` : ''}
-                      </option>
-                    ))}
-                </select>
-              </div>
-
-              {/* 3. Bairro Search Input */}
-              <div>
-                <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-1 flex items-center gap-1">
-                  <Search className="w-3.5 h-3.5 text-emerald-500" /> Buscar Bairro
-                </label>
-                <div className="relative w-full">
-                  <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                  <input
-                    type="text"
-                    value={bairroSearchFilter}
-                    onChange={(e) => setBairroSearchFilter(e.target.value)}
-                    placeholder="Buscar bairro por nome..."
-                    className={`w-full pl-9 pr-3 py-2 rounded-xl text-xs font-semibold border ${
-                      darkMode
-                        ? 'bg-slate-800 border-slate-700 text-white'
-                        : 'bg-slate-50 border-slate-200 text-slate-900'
-                    } focus:outline-none focus:ring-2 focus:ring-emerald-500`}
-                  />
-                </div>
-              </div>
-            </div>
-
-            <div className="mt-3 pt-3 border-t border-slate-200/10 flex flex-col sm:flex-row justify-between items-start sm:items-center text-xs text-slate-400 gap-1">
-              <span>
-                Filtrando por:{' '}
-                <strong className="text-emerald-400 font-bold">
-                  {currentCidadeObj ? currentCidadeObj.nome : 'Todas as Cidades'}
-                </strong>
-              </span>
-              <span>
-                Mostrando <strong className="text-emerald-500 font-bold">{filteredBairros.length}</strong> de {bairros.length} bairros
-              </span>
-            </div>
-          </div>
-
           {/* City Overall Progress Banner */}
           <div
             className={`p-5 rounded-2xl border transition-colors shadow-sm ${
@@ -553,13 +436,6 @@ export const QuadrasControlView: React.FC<QuadrasControlViewProps> = ({
               <ArrowLeft className="w-4 h-4 text-emerald-400" />
               Voltar para Lista de Bairros
             </button>
-
-            <div className="text-xs text-slate-400">
-              Exibindo quadras do bairro:{' '}
-              <strong className="text-emerald-400 font-extrabold text-sm ml-1">
-                {currentBairroObj?.nome || 'Bairro Selecionado'}
-              </strong>
-            </div>
           </div>
 
           {/* Top Filter & Control Panel */}
@@ -575,10 +451,10 @@ export const QuadrasControlView: React.FC<QuadrasControlViewProps> = ({
                 </div>
                 <div>
                   <h2 className="text-lg font-bold">
-                    Bairro {currentBairroObj?.nome || ''} — Grade de Quadras
+                    Grade de Quadras
                   </h2>
                   <p className="text-xs text-slate-400">
-                    Acompanhe e marque o andamento das quadras deste bairro
+                    Acompanhe e marque o andamento das quadras
                   </p>
                 </div>
               </div>
@@ -609,7 +485,7 @@ export const QuadrasControlView: React.FC<QuadrasControlViewProps> = ({
             </div>
 
             {/* Filter Dropdowns Grid */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
               {/* Cidade Filter */}
               <div>
                 <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-1 flex items-center gap-1">
@@ -633,31 +509,6 @@ export const QuadrasControlView: React.FC<QuadrasControlViewProps> = ({
                       {c.nome}
                     </option>
                   ))}
-                </select>
-              </div>
-
-              {/* Bairro Filter */}
-              <div>
-                <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-1 flex items-center gap-1">
-                  <MapPin className="w-3.5 h-3.5 text-emerald-500" /> Bairro
-                </label>
-                <select
-                  value={selectedBairro}
-                  onChange={(e) => setSelectedBairro(e.target.value)}
-                  className={`w-full px-3 py-2 rounded-xl text-xs font-semibold border ${
-                    darkMode
-                      ? 'bg-slate-800 border-slate-700 text-white'
-                      : 'bg-slate-50 border-slate-200 text-slate-900'
-                  } focus:outline-none focus:ring-2 focus:ring-emerald-500`}
-                >
-                  <option value="">← Voltar para Lista</option>
-                  {bairros
-                    .filter((b) => (selectedCidade ? String(b.cidadeId) === selectedCidade : true))
-                    .map((b) => (
-                      <option key={b.id} value={String(b.id)}>
-                        {b.nome} {b.cidadeNome ? `(${b.cidadeNome})` : ''}
-                      </option>
-                    ))}
                 </select>
               </div>
 

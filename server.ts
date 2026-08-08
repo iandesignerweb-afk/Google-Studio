@@ -11,6 +11,7 @@ import {
   CidadeDB,
   BairroDB,
   QuadraDB,
+  CartaoDB,
   HistoricoDB,
 } from './server/db.js';
 
@@ -21,7 +22,7 @@ interface AuthRequest extends Request {
     id: number;
     usuario: string;
     nome: string;
-    permissao: 'Administrador' | 'Usuário comum';
+    permissao: 'Administrador' | 'Dirigente' | 'Usuário comum';
   };
 }
 
@@ -116,13 +117,14 @@ async function startServer() {
     const senhaHash = bcrypt.hashSync(cleanSenha, salt);
 
     const id = db.counters.userId++;
+    const isFirstUser = db.users.length === 0;
     const newUser: UserDB = {
       id,
       nome: cleanUsuario,
       usuario: cleanUsuario,
       email: cleanEmail,
       senhaHash,
-      permissao: 'Usuário comum',
+      permissao: isFirstUser ? 'Administrador' : 'Dirigente',
       createdAt: new Date().toISOString(),
     };
 
@@ -252,13 +254,14 @@ async function startServer() {
       const dummyHash = bcrypt.hashSync(googleId || 'google-oauth-pass-2026', salt);
 
       const id = db.counters.userId++;
+      const isFirstUser = db.users.length === 0;
       user = {
         id,
         nome: name || cleanEmail.split('@')[0],
         usuario: uniqueUser,
         email: cleanEmail,
         senhaHash: dummyHash,
-        permissao: 'Usuário comum',
+        permissao: isFirstUser ? 'Administrador' : 'Dirigente',
         createdAt: new Date().toISOString(),
       };
 
@@ -417,7 +420,7 @@ async function startServer() {
         nome: String(nome).trim(),
         usuario: String(usuario).trim(),
         senhaHash,
-        permissao: permissao === 'Administrador' ? 'Administrador' : 'Usuário comum',
+        permissao: permissao === 'Administrador' ? 'Administrador' : 'Dirigente',
         createdAt: new Date().toISOString(),
       };
 
@@ -472,7 +475,7 @@ async function startServer() {
       if (nome) user.nome = String(nome).trim();
       if (permissao) {
         user.permissao =
-          permissao === 'Administrador' ? 'Administrador' : 'Usuário comum';
+          permissao === 'Administrador' ? 'Administrador' : 'Dirigente';
       }
 
       if (senha && String(senha).trim().length > 0) {
@@ -1192,16 +1195,101 @@ async function startServer() {
   });
 
   app.post('/api/cartoes', authenticateToken, requireAdmin, (req: AuthRequest, res: Response) => {
-    const { titulo, descricao, cidadeId, bairroId, usuarioId, quadraIds } = req.body;
+    const {
+      titulo,
+      descricao,
+      cidadeId,
+      cidadeNome,
+      bairroId,
+      bairroNome,
+      usuarioId,
+      quadraIds,
+      quadrasIniciaisInicio,
+      quadrasIniciaisFim,
+    } = req.body;
 
     if (!titulo || String(titulo).trim().length === 0) {
-      return res.status(400).json({ error: 'Título do cartão é obrigatório.' });
+      return res.status(400).json({ error: 'Nome do cartão é obrigatório.' });
     }
 
     const db = getDB();
     const cleanTitle = String(titulo).trim();
 
+    // Resolve or Auto-create Cidade
+    let resolvedCidadeId = cidadeId ? Number(cidadeId) : null;
+    if (!resolvedCidadeId) {
+      if (cidadeNome && String(cidadeNome).trim()) {
+        const found = db.cidades.find((c) => c.nome.toLowerCase() === String(cidadeNome).trim().toLowerCase());
+        if (found) {
+          resolvedCidadeId = found.id;
+        } else {
+          const newCity: CidadeDB = {
+            id: db.counters.cidadeId++,
+            nome: String(cidadeNome).trim(),
+            createdAt: new Date().toISOString(),
+          };
+          db.cidades.push(newCity);
+          resolvedCidadeId = newCity.id;
+        }
+      } else if (db.cidades.length > 0) {
+        resolvedCidadeId = db.cidades[0].id;
+      }
+    }
+
+    // Resolve or Auto-create Bairro
+    let resolvedBairroId = bairroId ? Number(bairroId) : null;
+    if (!resolvedBairroId && bairroNome && String(bairroNome).trim()) {
+      const cleanBairro = String(bairroNome).trim();
+      const foundBairro = db.bairros.find(
+        (b) =>
+          (!resolvedCidadeId || b.cidadeId === resolvedCidadeId) &&
+          b.nome.toLowerCase() === cleanBairro.toLowerCase()
+      );
+
+      if (foundBairro) {
+        resolvedBairroId = foundBairro.id;
+      } else if (resolvedCidadeId) {
+        const newBairro: BairroDB = {
+          id: db.counters.bairroId++,
+          cidadeId: resolvedCidadeId,
+          nome: cleanBairro,
+          createdAt: new Date().toISOString(),
+        };
+        db.bairros.push(newBairro);
+        resolvedBairroId = newBairro.id;
+      }
+    }
+
     const requestedQuadraIds = Array.isArray(quadraIds) ? quadraIds.map(Number) : [];
+
+    // Optionally auto-create initial quadras for this card
+    if (
+      quadrasIniciaisInicio !== undefined &&
+      quadrasIniciaisFim !== undefined &&
+      resolvedCidadeId &&
+      resolvedBairroId
+    ) {
+      const start = Number(quadrasIniciaisInicio);
+      const end = Number(quadrasIniciaisFim);
+      if (!isNaN(start) && !isNaN(end) && start <= end) {
+        for (let i = start; i <= end; i++) {
+          const numStr = String(i).padStart(2, '0');
+          const newQuadra: QuadraDB = {
+            id: db.counters.quadraId++,
+            cidadeId: resolvedCidadeId,
+            bairroId: resolvedBairroId,
+            numero: numStr,
+            status: 'Não feita',
+            concluidaEm: null,
+            usuarioId: null,
+            usuarioNome: null,
+            createdAt: new Date().toISOString(),
+          };
+          db.quadras.push(newQuadra);
+          requestedQuadraIds.push(newQuadra.id);
+        }
+      }
+    }
 
     // Exclusivity validation: Ensure no quadra is already linked to another cartão
     const takenQuadraIds = (db.cartoes || []).flatMap((c) => c.quadraIds || []);
@@ -1223,8 +1311,8 @@ async function startServer() {
       id: db.counters.cartaoId++,
       titulo: cleanTitle,
       descricao: descricao ? String(descricao).trim() : '',
-      cidadeId: cidadeId ? Number(cidadeId) : null,
-      bairroId: bairroId ? Number(bairroId) : null,
+      cidadeId: resolvedCidadeId,
+      bairroId: resolvedBairroId,
       usuarioId: assignedUser ? assignedUser.id : null,
       usuarioNome: assignedUser ? assignedUser.nome : null,
       quadraIds: requestedQuadraIds,
@@ -1245,6 +1333,120 @@ async function startServer() {
     );
 
     return res.status(201).json(newCartao);
+  });
+
+  app.post('/api/cartoes/:id/quadras', authenticateToken, requireAdmin, (req: AuthRequest, res: Response) => {
+    const cartaoId = Number(req.params.id);
+    const { numero, inicio, fim, numeros } = req.body;
+    const db = getDB();
+
+    const cartao = (db.cartoes || []).find((c) => c.id === cartaoId);
+    if (!cartao) {
+      return res.status(404).json({ error: 'Cartão não encontrado.' });
+    }
+
+    // Ensure Cidade exists
+    let cityId = cartao.cidadeId;
+    if (!cityId) {
+      if (db.cidades.length === 0) {
+        const defaultCity: CidadeDB = {
+          id: db.counters.cidadeId++,
+          nome: 'Cidade Principal',
+          createdAt: new Date().toISOString(),
+        };
+        db.cidades.push(defaultCity);
+        cityId = defaultCity.id;
+      } else {
+        cityId = db.cidades[0].id;
+      }
+      cartao.cidadeId = cityId;
+    }
+
+    // Ensure Bairro exists
+    let bairroId = cartao.bairroId;
+    if (!bairroId) {
+      const defaultBairro: BairroDB = {
+        id: db.counters.bairroId++,
+        cidadeId: cityId,
+        nome: 'Geral',
+        createdAt: new Date().toISOString(),
+      };
+      db.bairros.push(defaultBairro);
+      bairroId = defaultBairro.id;
+      cartao.bairroId = bairroId;
+    }
+
+    const quadrasCriadas: number[] = [];
+
+    if (inicio !== undefined && fim !== undefined) {
+      const start = Number(inicio);
+      const end = Number(fim);
+      if (!isNaN(start) && !isNaN(end) && start <= end) {
+        for (let i = start; i <= end; i++) {
+          const numStr = String(i).padStart(2, '0');
+          const newQuadra: QuadraDB = {
+            id: db.counters.quadraId++,
+            cidadeId: cityId,
+            bairroId: bairroId,
+            numero: numStr,
+            status: 'Não feita',
+            concluidaEm: null,
+            usuarioId: null,
+            usuarioNome: null,
+            createdAt: new Date().toISOString(),
+          };
+          db.quadras.push(newQuadra);
+          quadrasCriadas.push(newQuadra.id);
+        }
+      }
+    } else if (Array.isArray(numeros)) {
+      for (const n of numeros) {
+        const numStr = String(n).trim().padStart(2, '0');
+        const newQuadra: QuadraDB = {
+          id: db.counters.quadraId++,
+          cidadeId: cityId,
+          bairroId: bairroId,
+          numero: numStr,
+          status: 'Não feita',
+          concluidaEm: null,
+          usuarioId: null,
+          usuarioNome: null,
+          createdAt: new Date().toISOString(),
+        };
+        db.quadras.push(newQuadra);
+        quadrasCriadas.push(newQuadra.id);
+      }
+    } else if (numero) {
+      const numStr = String(numero).trim().padStart(2, '0');
+      const newQuadra: QuadraDB = {
+        id: db.counters.quadraId++,
+        cidadeId: cityId,
+        bairroId: bairroId,
+        numero: numStr,
+        status: 'Não feita',
+        concluidaEm: null,
+        usuarioId: null,
+        usuarioNome: null,
+        createdAt: new Date().toISOString(),
+      };
+      db.quadras.push(newQuadra);
+      quadrasCriadas.push(newQuadra.id);
+    }
+
+    cartao.quadraIds = Array.from(new Set([...(cartao.quadraIds || []), ...quadrasCriadas]));
+    saveDB();
+
+    addAuditLog(
+      req.user!.id,
+      req.user!.nome,
+      'Criação de Quadras no Cartão',
+      `Criou e vinculou ${quadrasCriadas.length} nova(s) quadra(s) ao Cartão "${cartao.titulo}".`
+    );
+
+    return res.json({
+      cartao,
+      countCriadas: quadrasCriadas.length,
+    });
   });
 
   app.put('/api/cartoes/:id', authenticateToken, requireAdmin, (req: AuthRequest, res: Response) => {

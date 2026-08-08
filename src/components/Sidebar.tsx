@@ -19,7 +19,6 @@ export type NavItem =
   | 'dashboard'
   | 'quadras'
   | 'cartoes'
-  | 'cidades'
   | 'relatorios'
   | 'auditoria'
   | 'usuarios';
@@ -63,15 +62,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
     },
     {
       id: 'cartoes' as NavItem,
-      label: 'Cartões de Visita',
+      label: 'Cartões',
       icon: CreditCard,
-      adminOnly: false,
-      badge: 'Novo',
-    },
-    {
-      id: 'cidades' as NavItem,
-      label: 'Bairros e Quadras',
-      icon: MapPin,
       adminOnly: false,
     },
     {

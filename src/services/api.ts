@@ -229,6 +229,14 @@ export const api = {
     }),
   deleteCartao: async (id: number) =>
     request<{ message: string }>(`/api/cartoes/${id}`, { method: 'DELETE' }),
+  createQuadrasParaCartao: async (
+    cartaoId: number,
+    data: { numero?: string; inicio?: number; fim?: number; numeros?: string[] }
+  ) =>
+    request<{ cartao: Cartao; countCriadas: number }>(`/api/cartoes/${cartaoId}/quadras`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
   toggleCartaoQuadra: async (cartaoId: number, quadraId: number) =>
     request<Quadra>(`/api/cartoes/${cartaoId}/quadras/${quadraId}/toggle`, {
       method: 'PATCH',

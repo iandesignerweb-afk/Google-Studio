@@ -1,16 +1,19 @@
 import { createClient } from '@supabase/supabase-js';
 
+const metaEnv = (import.meta as any).env || {};
+const procEnv = typeof process !== 'undefined' && process.env ? process.env : {};
+
 const supabaseUrl =
-  import.meta.env.VITE_SUPABASE_URL ||
-  process.env.VITE_SUPABASE_URL ||
-  process.env.SUPABASE_URL ||
+  metaEnv.VITE_SUPABASE_URL ||
+  procEnv.VITE_SUPABASE_URL ||
+  procEnv.SUPABASE_URL ||
   '';
 
 const supabaseAnonKey =
-  import.meta.env.VITE_SUPABASE_ANON_KEY ||
-  process.env.VITE_SUPABASE_ANON_KEY ||
-  process.env.SUPABASE_ANON_KEY ||
-  process.env.SUPABASE_PUBLISHABLE_KEY ||
+  metaEnv.VITE_SUPABASE_ANON_KEY ||
+  procEnv.VITE_SUPABASE_ANON_KEY ||
+  procEnv.SUPABASE_ANON_KEY ||
+  procEnv.SUPABASE_PUBLISHABLE_KEY ||
   '';
 
 export const isSupabaseConfigured = Boolean(supabaseUrl && supabaseAnonKey);
