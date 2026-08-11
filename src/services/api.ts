@@ -118,6 +118,12 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
   }
 
   if (!response.ok) {
+    if (response.status === 401 && !endpoint.includes('/api/auth/login')) {
+      clearStoredToken();
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('auth_unauthorized'));
+      }
+    }
     const errorMsg =
       data && typeof data === 'object' && data.error
         ? data.error
@@ -165,6 +171,15 @@ export const api = {
 
   getMe: async () => {
     return request<User>('/api/auth/me');
+  },
+
+  googleLogin: async (data: { email?: string | null; name?: string | null; uid?: string }) => {
+    const res = await request<{ token: string; user: User }>('/api/auth/google', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+    setStoredToken(res.token);
+    return res;
   },
 
   recoverPassword: async (usuario: string) => {

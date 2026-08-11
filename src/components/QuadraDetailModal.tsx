@@ -168,13 +168,13 @@ export const QuadraDetailModal: React.FC<QuadraDetailModalProps> = ({
               <div className="py-6 text-center text-xs text-slate-400">
                 Carregando histórico...
               </div>
-            ) : history.length === 0 ? (
+            ) : !history || history.length === 0 ? (
               <p className="text-xs text-slate-500 italic py-2">
                 Nenhum histórico registrado até o momento.
               </p>
             ) : (
               <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
-                {history.map((h) => (
+                {(history || []).map((h) => (
                   <div
                     key={h.id}
                     className="p-3 rounded-xl bg-slate-100 dark:bg-slate-800/40 border border-slate-200/50 dark:border-slate-800 text-xs flex justify-between items-center"

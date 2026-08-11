@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../services/api';
 import { User } from '../types';
-import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import { signInWithPopup } from 'firebase/auth';
+import { auth, googleProvider } from '../firebaseConfig';
 import {
   Lock,
   User as UserIcon,
@@ -110,26 +111,25 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
     }
   };
 
-  // Google Sign In / Up via Supabase OAuth
+  // Google Sign In / Up via Firebase Auth
   const handleGoogleAuth = async () => {
     setGoogleLoading(true);
     setError(null);
 
-    if (isSupabaseConfigured && supabase) {
-      try {
-        const { error: oauthError } = await supabase.auth.signInWithOAuth({
-          provider: 'google',
-          options: {
-            redirectTo: window.location.origin,
-          },
-        });
-        if (oauthError) throw oauthError;
-      } catch (err: any) {
-        setError(err.message || 'Erro ao iniciar autenticação com o Google.');
-        setGoogleLoading(false);
+    try {
+      const result = await signInWithPopup(auth, googleProvider);
+      const user = result.user;
+      const res = await api.googleLogin({
+        email: user.email,
+        name: user.displayName || user.email?.split('@')[0],
+        uid: user.uid,
+      });
+      onLoginSuccess(res.user);
+    } catch (err: any) {
+      if (err.code !== 'auth/popup-closed-by-user' && err.code !== 'auth/cancelled-popup-request') {
+        setError(err.message || 'Erro ao autenticar com o Google.');
       }
-    } else {
-      setError('Supabase não está configurado para login via Google.');
+    } finally {
       setGoogleLoading(false);
     }
   };

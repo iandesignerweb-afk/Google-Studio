@@ -201,7 +201,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
           <div className="h-64 w-full">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={stats.progressoPorCidade} margin={{ top: 10, right: 10, left: -20, bottom: 20 }}>
+              <BarChart data={stats?.progressoPorCidade || []} margin={{ top: 10, right: 10, left: -20, bottom: 20 }}>
                 <XAxis
                   dataKey="cidade"
                   tick={{ fill: darkMode ? '#94a3b8' : '#64748b', fontSize: 11 }}
@@ -222,7 +222,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                   formatter={(value: any) => [`${value}%`, 'Concluído']}
                 />
                 <Bar dataKey="percentual" radius={[8, 8, 0, 0]}>
-                  {stats.progressoPorCidade.map((_, index) => (
+                  {(stats?.progressoPorCidade || []).map((_, index) => (
                     <Cell
                       key={`cell-${index}`}
                       fill={COLORS[index % COLORS.length]}
@@ -256,7 +256,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             <ResponsiveContainer width="100%" height="100%">
               <BarChart
                 layout="vertical"
-                data={stats.progressoPorUsuario}
+                data={stats?.progressoPorUsuario || []}
                 margin={{ top: 10, right: 20, left: 20, bottom: 10 }}
               >
                 <XAxis
@@ -295,7 +295,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           Bairros com Maior Andamento
         </h3>
         <div className="space-y-4">
-          {stats.bairrosMaisAvançados.map((b, idx) => (
+          {(stats?.bairrosMaisAvançados || []).map((b, idx) => (
             <div key={idx} className="space-y-1.5">
               <div className="flex justify-between items-center text-xs">
                 <span className="font-bold">

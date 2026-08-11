@@ -1,16 +1,59 @@
 import express, { Request, Response, NextFunction } from 'express';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
-import { supabaseServer, isSupabaseServerConfigured } from './server/supabaseServer.js';
+import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
+
+import {
+  db,
+  getUsers,
+  getUserById,
+  findUserByUsernameOrEmail,
+  createUserDoc,
+  updateUserDoc,
+  deleteUserDoc,
+  getCidades,
+  getCidadeById,
+  createCidadeDoc,
+  updateCidadeDoc,
+  deleteCidadeDoc,
+  getBairros,
+  getBairroById,
+  createBairroDoc,
+  updateBairroDoc,
+  deleteBairroDoc,
+  getQuadras,
+  getQuadraById,
+  createQuadraDoc,
+  bulkCreateQuadrasDocs,
+  updateQuadraDoc,
+  deleteQuadraDoc,
+  getCartoes,
+  getCartaoById,
+  createCartaoDoc,
+  updateCartaoDoc,
+  deleteCartaoDoc,
+  getCartaoQuadras,
+  addCartaoQuadras,
+  deleteCartaoQuadrasByCartaoId,
+  getCartaoDesignacoes,
+  addCartaoDesignacoes,
+  deleteCartaoDesignacoesByCartaoId,
+  getHistorico,
+  addHistoricoDocs,
+  getAuditLogs,
+  addAuditLogDoc,
+} from './server/firebaseServer.js';
+
+const JWT_SECRET = process.env.JWT_SECRET || 'controle_de_quadras_firebase_secret_2026';
 
 export interface AuthRequest extends Request {
   user?: {
-    id: number;
+    id: string | number;
     usuario: string;
     nome: string;
     email?: string;
     permissao: 'Administrador' | 'Dirigente' | 'Usuário comum';
-    sbUser?: any;
   };
 }
 
@@ -21,16 +64,15 @@ app.use(express.json());
 // HELPER: AUDIT LOG WRITER
 // -------------------------------------------------------------
 async function addAuditLog(
-  usuarioId: number | null,
+  usuarioId: string | number | null,
   usuarioNome: string,
   acao: string,
   detalhes: string,
   ip: string = '127.0.0.1'
 ) {
-  if (!supabaseServer) return;
   try {
-    await supabaseServer.from('audit_logs').insert({
-      usuario_id: usuarioId,
+    await addAuditLogDoc({
+      usuario_id: usuarioId ? String(usuarioId) : null,
       usuario_nome: usuarioNome,
       acao,
       detalhes,
@@ -38,7 +80,36 @@ async function addAuditLog(
       data_hora: new Date().toISOString(),
     });
   } catch (err) {
-    console.error('Erro ao gravar log de auditoria no Supabase:', err);
+    console.error('Erro ao gravar log de auditoria no Firebase:', err);
+  }
+}
+
+// -------------------------------------------------------------
+// INITIAL SEED FOR DEMO USERS
+// -------------------------------------------------------------
+async function seedDefaultUsers() {
+  try {
+    const defaultUsers = [
+      { nome: 'Administrador', usuario: 'admin', email: 'admin@quadras.com', senha: 'admin123', permissao: 'Administrador' },
+      { nome: 'Carlos Silva', usuario: 'carlos', email: 'carlos@quadras.com', senha: 'user123', permissao: 'Usuário comum' },
+    ];
+
+    for (const u of defaultUsers) {
+      const existing = await findUserByUsernameOrEmail(u.usuario);
+      if (!existing) {
+        const hash = bcrypt.hashSync(u.senha, 10);
+        await createUserDoc({
+          nome: u.nome,
+          usuario: u.usuario,
+          email: u.email,
+          senha_hash: hash,
+          permissao: u.permissao,
+        });
+        console.log(`[Firebase Seed] Criado usuário padrão: ${u.usuario}`);
+      }
+    }
+  } catch (err) {
+    console.warn('[Firebase Seed] Erro ao inicializar usuários padrões:', err);
   }
 }
 
@@ -57,85 +128,29 @@ const authenticateToken = async (
     return res.status(401).json({ error: 'Acesso não autorizado. Faça login.' });
   }
 
-  if (!isSupabaseServerConfigured || !supabaseServer) {
-    return res.status(500).json({ error: 'Servidor Supabase não configurado.' });
-  }
-
   try {
-    const { data: { user: sbUser }, error: sbError } = await supabaseServer.auth.getUser(token);
+    const decoded: any = jwt.verify(token, JWT_SECRET);
+    let userDoc = await getUserById(String(decoded.id));
 
-    if (sbError || !sbUser) {
+    if (!userDoc && decoded.email) {
+      userDoc = await findUserByUsernameOrEmail(decoded.email);
+    }
+
+    if (!userDoc) {
       return res.status(401).json({ error: 'Sessão expirada ou inválida. Faça login novamente.' });
     }
 
-    const email = sbUser.email ? sbUser.email.toLowerCase() : '';
-
-    // Buscar perfil do usuário na tabela public.users
-    let userProfile: any = null;
-    if (email) {
-      const { data: users } = await supabaseServer
-        .from('users')
-        .select('*')
-        .eq('email', email);
-      if (users && users.length > 0) {
-        userProfile = users[0];
-      }
-    }
-
-    // Se não encontrou por email, busca por usuario
-    if (!userProfile) {
-      const username = sbUser.user_metadata?.username || email.split('@')[0];
-      const { data: usersByUsername } = await supabaseServer
-        .from('users')
-        .select('*')
-        .ilike('usuario', username);
-      if (usersByUsername && usersByUsername.length > 0) {
-        userProfile = usersByUsername[0];
-      }
-    }
-
-    // Auto-criação do perfil em public.users caso o usuário exista apenas no Supabase Auth
-    if (!userProfile) {
-      const { count } = await supabaseServer
-        .from('users')
-        .select('*', { count: 'exact', head: true });
-
-      const isFirstUser = (count === 0);
-      const userName = sbUser.user_metadata?.name || sbUser.user_metadata?.username || (email ? email.split('@')[0] : 'Usuário');
-      const userUsername = sbUser.user_metadata?.username || (email ? email.split('@')[0] : `user_${Date.now()}`);
-
-      const { data: created, error: createError } = await supabaseServer
-        .from('users')
-        .insert({
-          nome: userName,
-          usuario: userUsername,
-          email: email || `${userUsername}@quadras.com`,
-          permissao: isFirstUser ? 'Administrador' : 'Dirigente',
-        })
-        .select()
-        .single();
-
-      if (createError) {
-        console.error('Erro ao criar perfil de usuário no Supabase:', createError);
-        return res.status(500).json({ error: 'Erro ao registrar perfil de usuário.' });
-      }
-
-      userProfile = created;
-    }
-
     req.user = {
-      id: userProfile.id,
-      usuario: userProfile.usuario,
-      nome: userProfile.nome,
-      email: userProfile.email,
-      permissao: userProfile.permissao,
-      sbUser,
+      id: userDoc.id,
+      usuario: userDoc.usuario,
+      nome: userDoc.nome,
+      email: userDoc.email,
+      permissao: userDoc.permissao,
     };
 
     return next();
   } catch (err: any) {
-    console.error('Erro na autenticação:', err);
-    return res.status(401).json({ error: 'Falha na verificação da sessão: ' + err.message });
+    return res.status(401).json({ error: 'Sessão expirada ou inválida. Faça login novamente.' });
   }
 };
 
@@ -147,197 +162,107 @@ const requireAdmin = (req: AuthRequest, res: Response, next: NextFunction) => {
 };
 
 // -------------------------------------------------------------
-// ROTAS DE AUTENTICAÇÃO (SUPABASE AUTH)
+// ROTAS DE AUTENTICAÇÃO
 // -------------------------------------------------------------
 
-// Login com Supabase Auth
+// Login tradicional com Usuário / E-mail e Senha
 app.post('/api/auth/login', async (req: Request, res: Response) => {
-  const { usuario, senha } = req.body;
-
-  if (!usuario || !senha) {
-    return res.status(400).json({ error: 'Informe usuário/e-mail e senha para continuar.' });
-  }
-
-  if (!isSupabaseServerConfigured || !supabaseServer) {
-    return res.status(500).json({ error: 'Banco de dados Supabase não está configurado.' });
-  }
-
-  const inputClean = String(usuario).trim();
-  const cleanSenha = String(senha).trim();
-
   try {
-    let targetEmail = inputClean.toLowerCase();
-
-    // Se o usuário digitou nome de usuário e não um e-mail com '@'
-    if (!inputClean.includes('@')) {
-      const { data: profile } = await supabaseServer
-        .from('users')
-        .select('email, usuario')
-        .ilike('usuario', inputClean)
-        .maybeSingle();
-
-      if (profile && profile.email) {
-        targetEmail = profile.email.toLowerCase();
-      } else {
-        targetEmail = `${inputClean.toLowerCase()}@quadras.com`;
-      }
+    const { usuario, senha } = req.body;
+    if (!usuario || !senha) {
+      return res.status(400).json({ error: 'Usuário/E-mail e senha são obrigatórios.' });
     }
 
-    // Autentica via Supabase Auth
-    const { data: authData, error: authError } = await supabaseServer.auth.signInWithPassword({
-      email: targetEmail,
-      password: cleanSenha,
-    });
+    const cleanInput = String(usuario).trim();
+    const cleanSenha = String(senha).trim();
 
-    if (authError || !authData.session) {
-      return res.status(401).json({ error: 'Usuário/E-mail ou senha incorretos.' });
+    const user = await findUserByUsernameOrEmail(cleanInput);
+    if (!user) {
+      return res.status(401).json({ error: 'Usuário ou senha incorretos.' });
     }
 
-    // Busca perfil do usuário
-    const { data: users } = await supabaseServer
-      .from('users')
-      .select('*')
-      .eq('email', targetEmail);
-
-    let userProfile = users && users.length > 0 ? users[0] : null;
-
-    if (!userProfile) {
-      const { count } = await supabaseServer
-        .from('users')
-        .select('*', { count: 'exact', head: true });
-
-      const isFirst = count === 0;
-      const { data: newProfile } = await supabaseServer
-        .from('users')
-        .insert({
-          nome: inputClean,
-          usuario: inputClean,
-          email: targetEmail,
-          permissao: isFirst ? 'Administrador' : 'Dirigente',
-        })
-        .select()
-        .single();
-
-      userProfile = newProfile;
+    const validPassword = bcrypt.compareSync(cleanSenha, user.senha_hash || '');
+    if (!validPassword) {
+      return res.status(401).json({ error: 'Usuário ou senha incorretos.' });
     }
 
-    const clientIp = req.ip || req.socket.remoteAddress || '127.0.0.1';
-    await addAuditLog(
-      userProfile?.id || null,
-      userProfile?.nome || inputClean,
-      'Login',
-      'Login efetuado com sucesso via Supabase Auth.',
-      String(clientIp)
+    const token = jwt.sign(
+      { id: user.id, email: user.email, usuario: user.usuario, permissao: user.permissao },
+      JWT_SECRET,
+      { expiresIn: '7d' }
     );
 
+    await addAuditLog(user.id, user.nome, 'Login', `Usuário ${user.usuario} realizou login.`, req.ip);
+
     return res.json({
-      token: authData.session.access_token,
+      token,
       user: {
-        id: userProfile.id,
-        nome: userProfile.nome,
-        usuario: userProfile.usuario,
-        email: userProfile.email,
-        permissao: userProfile.permissao,
+        id: user.id,
+        nome: user.nome,
+        usuario: user.usuario,
+        email: user.email,
+        permissao: user.permissao,
       },
     });
   } catch (err: any) {
     console.error('Erro no login:', err);
-    return res.status(500).json({ error: 'Erro interno ao processar login: ' + err.message });
+    return res.status(500).json({ error: 'Erro interno ao realizar login: ' + err.message });
   }
 });
 
-// Cadastro de novos usuários via Supabase Auth
+// Cadastro de novos usuários
 app.post('/api/auth/register', async (req: Request, res: Response) => {
-  const { usuario, email, senha, confirmarSenha } = req.body;
-
-  if (!usuario || !email || !senha || !confirmarSenha) {
-    return res.status(400).json({ error: 'Por favor, preencha todos os campos obrigatórios.' });
-  }
-
-  const cleanUsuario = String(usuario).trim();
-  const cleanEmail = String(email).trim().toLowerCase();
-  const cleanSenha = String(senha).trim();
-  const cleanConfirmar = String(confirmarSenha).trim();
-
-  if (cleanSenha !== cleanConfirmar) {
-    return res.status(400).json({ error: 'A senha e a confirmação de senha não coincidem.' });
-  }
-
-  if (cleanSenha.length < 6) {
-    return res.status(400).json({ error: 'A senha deve ter no mínimo 6 caracteres.' });
-  }
-
-  if (!isSupabaseServerConfigured || !supabaseServer) {
-    return res.status(500).json({ error: 'Banco de dados Supabase não está configurado.' });
-  }
-
   try {
-    // Verifica se usuario ou email ja existe em public.users
-    const { data: existing } = await supabaseServer
-      .from('users')
-      .select('id')
-      .or(`usuario.ilike.${cleanUsuario},email.ilike.${cleanEmail}`);
+    const { usuario, email, senha, confirmarSenha } = req.body;
 
-    if (existing && existing.length > 0) {
-      return res.status(400).json({ error: 'Este nome de usuário ou e-mail já está cadastrado.' });
+    if (!usuario || !email || !senha || !confirmarSenha) {
+      return res.status(400).json({ error: 'Todos os campos são obrigatórios para cadastro.' });
     }
 
-    // Cria conta no Supabase Auth
-    const { data: authData, error: authError } = await supabaseServer.auth.admin.createUser({
+    if (senha !== confirmarSenha) {
+      return res.status(400).json({ error: 'A senha e a confirmação não coincidem.' });
+    }
+
+    if (String(senha).length < 6) {
+      return res.status(400).json({ error: 'A senha deve ter no mínimo 6 caracteres.' });
+    }
+
+    const cleanUsername = String(usuario).trim();
+    const cleanEmail = String(email).trim().toLowerCase();
+    const cleanSenha = String(senha).trim();
+
+    const existingUser = await findUserByUsernameOrEmail(cleanUsername);
+    if (existingUser) {
+      return res.status(400).json({ error: 'Este nome de usuário ou e-mail já está em uso.' });
+    }
+
+    const existingEmail = await findUserByUsernameOrEmail(cleanEmail);
+    if (existingEmail) {
+      return res.status(400).json({ error: 'Este e-mail já está cadastrado.' });
+    }
+
+    const allUsers = await getUsers();
+    const isFirstUser = allUsers.length === 0;
+
+    const hash = bcrypt.hashSync(cleanSenha, 10);
+    const newUser = await createUserDoc({
+      nome: cleanUsername,
+      usuario: cleanUsername,
       email: cleanEmail,
-      password: cleanSenha,
-      email_confirm: true,
-      user_metadata: {
-        username: cleanUsuario,
-        name: cleanUsuario,
-      },
+      senha_hash: hash,
+      permissao: isFirstUser ? 'Administrador' : 'Usuário comum',
     });
 
-    if (authError) {
-      return res.status(400).json({ error: 'Erro no Supabase Auth: ' + authError.message });
-    }
-
-    // Define permissao (se for o primeiro usuario, vira Administrador)
-    const { count } = await supabaseServer
-      .from('users')
-      .select('*', { count: 'exact', head: true });
-
-    const isFirstUser = count === 0;
-    const permissao = isFirstUser ? 'Administrador' : 'Dirigente';
-
-    // Insere perfil no public.users
-    const { data: newUser, error: dbError } = await supabaseServer
-      .from('users')
-      .insert({
-        nome: cleanUsuario,
-        usuario: cleanUsuario,
-        email: cleanEmail,
-        permissao,
-      })
-      .select()
-      .single();
-
-    if (dbError) {
-      return res.status(500).json({ error: 'Erro ao criar perfil no banco: ' + dbError.message });
-    }
-
-    // Faz login para obter a sessão
-    const { data: sessionData } = await supabaseServer.auth.signInWithPassword({
-      email: cleanEmail,
-      password: cleanSenha,
-    });
-
-    const clientIp = req.ip || req.socket.remoteAddress || '127.0.0.1';
-    await addAuditLog(
-      newUser.id,
-      newUser.nome,
-      'Cadastro de Usuário',
-      `Novo usuário registrado com e-mail: ${cleanEmail}`,
-      String(clientIp)
+    const token = jwt.sign(
+      { id: newUser.id, email: newUser.email, usuario: newUser.usuario, permissao: newUser.permissao },
+      JWT_SECRET,
+      { expiresIn: '7d' }
     );
 
+    await addAuditLog(newUser.id, newUser.nome, 'Cadastro', `Novo usuário ${newUser.usuario} cadastrado.`, req.ip);
+
     return res.status(201).json({
-      token: sessionData?.session?.access_token || '',
+      token,
       user: {
         id: newUser.id,
         nome: newUser.nome,
@@ -348,149 +273,157 @@ app.post('/api/auth/register', async (req: Request, res: Response) => {
     });
   } catch (err: any) {
     console.error('Erro no cadastro:', err);
-    return res.status(500).json({ error: 'Erro ao registrar conta: ' + err.message });
+    return res.status(500).json({ error: 'Erro interno ao processar cadastro: ' + err.message });
+  }
+});
+
+// Autenticação com Google
+app.post('/api/auth/google', async (req: Request, res: Response) => {
+  try {
+    const { email, name, uid } = req.body;
+    if (!email) {
+      return res.status(400).json({ error: 'E-mail é obrigatório para autenticação do Google.' });
+    }
+
+    const cleanEmail = String(email).trim().toLowerCase();
+    let user = await findUserByUsernameOrEmail(cleanEmail);
+
+    if (!user) {
+      const allUsers = await getUsers();
+      const isFirstUser = allUsers.length === 0;
+      const baseName = name || cleanEmail.split('@')[0];
+      const baseUsername = cleanEmail.split('@')[0];
+
+      const dummyHash = bcrypt.hashSync('GoogleAuth_' + Date.now(), 10);
+      user = await createUserDoc({
+        nome: baseName,
+        usuario: baseUsername,
+        email: cleanEmail,
+        senha_hash: dummyHash,
+        permissao: isFirstUser ? 'Administrador' : 'Usuário comum',
+      });
+    }
+
+    const token = jwt.sign(
+      { id: user.id, email: user.email, usuario: user.usuario, permissao: user.permissao },
+      JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+
+    await addAuditLog(user.id, user.nome, 'Login Google', `Usuário ${user.usuario} logou via Google.`, req.ip);
+
+    return res.json({
+      token,
+      user: {
+        id: user.id,
+        nome: user.nome,
+        usuario: user.usuario,
+        email: user.email,
+        permissao: user.permissao,
+      },
+    });
+  } catch (err: any) {
+    console.error('Erro na autenticação com Google:', err);
+    return res.status(500).json({ error: 'Erro interno na autenticação com Google: ' + err.message });
+  }
+});
+
+// Recovery Request
+app.post('/api/auth/recover', async (req: Request, res: Response) => {
+  try {
+    const { usuario } = req.body;
+    if (!usuario) {
+      return res.status(400).json({ error: 'Informe o usuário ou e-mail.' });
+    }
+
+    const user = await findUserByUsernameOrEmail(String(usuario));
+    if (!user) {
+      return res.status(404).json({ error: 'Usuário não encontrado.' });
+    }
+
+    return res.json({
+      message: `Instruções de recuperação foram enviadas para o e-mail cadastrado (${user.email}).`,
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: 'Erro na recuperação de senha: ' + err.message });
+  }
+});
+
+app.post('/api/auth/recover-password', async (req: Request, res: Response) => {
+  try {
+    const { usuario } = req.body;
+    if (!usuario) {
+      return res.status(400).json({ error: 'Informe o usuário ou e-mail.' });
+    }
+
+    const user = await findUserByUsernameOrEmail(String(usuario));
+    if (!user) {
+      return res.status(404).json({ error: 'Usuário não encontrado.' });
+    }
+
+    return res.json({
+      message: `Instruções de recuperação foram enviadas para o e-mail cadastrado (${user.email}).`,
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: 'Erro na recuperação de senha: ' + err.message });
   }
 });
 
 // Logout
 app.post('/api/auth/logout', authenticateToken, async (req: AuthRequest, res: Response) => {
   if (req.user) {
-    await addAuditLog(req.user.id, req.user.nome, 'Logout', 'Sessão encerrada pelo usuário.');
+    await addAuditLog(req.user.id, req.user.nome, 'Logout', `Usuário ${req.user.usuario} fez logout.`, req.ip);
   }
   return res.json({ message: 'Logout realizado com sucesso.' });
 });
 
-// Retorna o usuário logado
+// GET /api/auth/me
 app.get('/api/auth/me', authenticateToken, (req: AuthRequest, res: Response) => {
-  if (!req.user) {
-    return res.status(404).json({ error: 'Usuário não encontrado.' });
-  }
-  return res.json({
-    id: req.user.id,
-    nome: req.user.nome,
-    usuario: req.user.usuario,
-    email: req.user.email,
-    permissao: req.user.permissao,
-  });
-});
-
-// Recuperação de senha
-app.post('/api/auth/recover-password', async (req: Request, res: Response) => {
-  const { usuario } = req.body;
-  if (!usuario) {
-    return res.status(400).json({ error: 'Informe o nome de usuário ou e-mail.' });
-  }
-
-  if (!isSupabaseServerConfigured || !supabaseServer) {
-    return res.status(500).json({ error: 'Servidor Supabase não configurado.' });
-  }
-
-  try {
-    const inputClean = String(usuario).trim().toLowerCase();
-    const { data: profile } = await supabaseServer
-      .from('users')
-      .select('*')
-      .or(`usuario.ilike.${inputClean},email.ilike.${inputClean}`)
-      .maybeSingle();
-
-    if (profile && profile.email) {
-      await supabaseServer.auth.resetPasswordForEmail(profile.email);
-      await addAuditLog(
-        profile.id,
-        profile.nome,
-        'Recuperação de Senha',
-        'Solicitação de redefinição de senha enviada para ' + profile.email
-      );
-    }
-
-    return res.json({
-      message: 'Solicitação registrada! Verifique seu e-mail para as instruções ou entre em contato com o Administrador.',
-    });
-  } catch (err: any) {
-    return res.status(500).json({ error: 'Erro ao solicitar recuperação: ' + err.message });
-  }
+  return res.json(req.user);
 });
 
 // -------------------------------------------------------------
-// GESTÃO DE USUÁRIOS (ADMINISTRADOR)
+// ROTAS DE GERENCIAMENTO DE USUÁRIOS (ADMIN)
 // -------------------------------------------------------------
-app.get('/api/users', authenticateToken, requireAdmin, async (_req: Request, res: Response) => {
+app.get('/api/users', authenticateToken, requireAdmin, async (req: Request, res: Response) => {
   try {
-    const { data: users, error } = await supabaseServer!
-      .from('users')
-      .select('id, nome, usuario, email, permissao, created_at')
-      .order('id', { ascending: true });
-
-    if (error) throw error;
-
-    const formatted = (users || []).map((u) => ({
+    const users = await getUsers();
+    const sanitized = users.map((u: any) => ({
       id: u.id,
       nome: u.nome,
       usuario: u.usuario,
       email: u.email,
       permissao: u.permissao,
-      createdAt: u.created_at,
+      created_at: u.created_at,
     }));
-
-    return res.json(formatted);
+    return res.json(sanitized);
   } catch (err: any) {
-    return res.status(500).json({ error: 'Erro ao listar usuários: ' + err.message });
+    return res.status(500).json({ error: 'Erro ao buscar usuários: ' + err.message });
   }
 });
 
 app.post('/api/users', authenticateToken, requireAdmin, async (req: AuthRequest, res: Response) => {
-  const { nome, usuario, senha, permissao, email } = req.body;
-
-  if (!nome || !usuario || !senha || !permissao) {
-    return res.status(400).json({ error: 'Todos os campos são obrigatórios.' });
-  }
-
-  const cleanUser = String(usuario).trim();
-  const cleanEmail = email ? String(email).trim().toLowerCase() : `${cleanUser.toLowerCase()}@quadras.com`;
-
   try {
-    // Verifica duplicidade no banco
-    const { data: existing } = await supabaseServer!
-      .from('users')
-      .select('id')
-      .or(`usuario.ilike.${cleanUser},email.ilike.${cleanEmail}`);
-
-    if (existing && existing.length > 0) {
-      return res.status(400).json({ error: 'Este nome de usuário ou e-mail já está em uso.' });
+    const { nome, usuario, email, senha, permissao } = req.body;
+    if (!nome || !usuario || !email || !senha || !permissao) {
+      return res.status(400).json({ error: 'Todos os campos são obrigatórios.' });
     }
 
-    // Cria no Supabase Auth
-    const { error: authErr } = await supabaseServer!.auth.admin.createUser({
-      email: cleanEmail,
-      password: String(senha).trim(),
-      email_confirm: true,
-      user_metadata: { username: cleanUser, name: String(nome).trim() },
+    const existing = await findUserByUsernameOrEmail(usuario);
+    if (existing) {
+      return res.status(400).json({ error: 'Já existe um usuário com esse nome de usuário ou e-mail.' });
+    }
+
+    const hash = bcrypt.hashSync(senha, 10);
+    const newUser = await createUserDoc({
+      nome,
+      usuario,
+      email: email.toLowerCase(),
+      senha_hash: hash,
+      permissao,
     });
 
-    if (authErr) {
-      return res.status(400).json({ error: 'Erro ao criar usuário no Supabase Auth: ' + authErr.message });
-    }
-
-    // Insere no public.users
-    const { data: newUser, error: dbErr } = await supabaseServer!
-      .from('users')
-      .insert({
-        nome: String(nome).trim(),
-        usuario: cleanUser,
-        email: cleanEmail,
-        permissao: permissao === 'Administrador' ? 'Administrador' : 'Dirigente',
-      })
-      .select()
-      .single();
-
-    if (dbErr) throw dbErr;
-
-    await addAuditLog(
-      req.user!.id,
-      req.user!.nome,
-      'Cadastro Usuário',
-      `Cadastrou o usuário "${newUser.nome}" (${newUser.usuario}) como ${newUser.permissao}.`
-    );
+    await addAuditLog(req.user!.id, req.user!.nome, 'Criou Usuário', `Criou o usuário ${newUser.usuario}.`, req.ip);
 
     return res.status(201).json({
       id: newUser.id,
@@ -498,7 +431,6 @@ app.post('/api/users', authenticateToken, requireAdmin, async (req: AuthRequest,
       usuario: newUser.usuario,
       email: newUser.email,
       permissao: newUser.permissao,
-      createdAt: newUser.created_at,
     });
   } catch (err: any) {
     return res.status(500).json({ error: 'Erro ao criar usuário: ' + err.message });
@@ -506,53 +438,25 @@ app.post('/api/users', authenticateToken, requireAdmin, async (req: AuthRequest,
 });
 
 app.put('/api/users/:id', authenticateToken, requireAdmin, async (req: AuthRequest, res: Response) => {
-  const userId = Number(req.params.id);
-  const { nome, usuario, senha, permissao, email } = req.body;
-
   try {
-    const { data: user } = await supabaseServer!
-      .from('users')
-      .select('*')
-      .eq('id', userId)
-      .maybeSingle();
+    const { id } = req.params;
+    const { nome, usuario, email, senha, permissao } = req.body;
 
+    const user = await getUserById(id);
     if (!user) {
       return res.status(404).json({ error: 'Usuário não encontrado.' });
     }
 
     const updates: any = {};
-    if (nome) updates.nome = String(nome).trim();
-    if (usuario) updates.usuario = String(usuario).trim();
-    if (email) updates.email = String(email).trim().toLowerCase();
+    if (nome) updates.nome = nome;
+    if (usuario) updates.usuario = usuario;
+    if (email) updates.email = email.toLowerCase();
     if (permissao) updates.permissao = permissao;
+    if (senha) updates.senha_hash = bcrypt.hashSync(senha, 10);
 
-    const { data: updated, error } = await supabaseServer!
-      .from('users')
-      .update(updates)
-      .eq('id', userId)
-      .select()
-      .single();
+    const updated = await updateUserDoc(id, updates);
 
-    if (error) throw error;
-
-    // Se a senha foi alterada, atualiza no Supabase Auth
-    if (senha && String(senha).trim().length >= 6) {
-      const targetEmail = updated.email || user.email;
-      const { data: authList } = await supabaseServer!.auth.admin.listUsers();
-      const authUser = authList?.users.find((u: any) => u.email?.toLowerCase() === targetEmail?.toLowerCase());
-      if (authUser) {
-        await supabaseServer!.auth.admin.updateUserById(authUser.id, {
-          password: String(senha).trim(),
-        });
-      }
-    }
-
-    await addAuditLog(
-      req.user!.id,
-      req.user!.nome,
-      'Edição de Usuário',
-      `Atualizou dados do usuário "${updated.nome}".`
-    );
+    await addAuditLog(req.user!.id, req.user!.nome, 'Atualizou Usuário', `Atualizou o usuário ${updated.usuario}.`, req.ip);
 
     return res.json({
       id: updated.id,
@@ -560,7 +464,6 @@ app.put('/api/users/:id', authenticateToken, requireAdmin, async (req: AuthReque
       usuario: updated.usuario,
       email: updated.email,
       permissao: updated.permissao,
-      createdAt: updated.created_at,
     });
   } catch (err: any) {
     return res.status(500).json({ error: 'Erro ao atualizar usuário: ' + err.message });
@@ -568,1111 +471,721 @@ app.put('/api/users/:id', authenticateToken, requireAdmin, async (req: AuthReque
 });
 
 app.delete('/api/users/:id', authenticateToken, requireAdmin, async (req: AuthRequest, res: Response) => {
-  const userId = Number(req.params.id);
-
   try {
-    const { data: user } = await supabaseServer!
-      .from('users')
-      .select('*')
-      .eq('id', userId)
-      .maybeSingle();
-
+    const { id } = req.params;
+    const user = await getUserById(id);
     if (!user) {
       return res.status(404).json({ error: 'Usuário não encontrado.' });
     }
 
-    // Tenta remover do Supabase Auth se houver email
-    if (user.email) {
-      const { data: authList } = await supabaseServer!.auth.admin.listUsers();
-      const authUser = authList?.users.find((u: any) => u.email?.toLowerCase() === user.email.toLowerCase());
-      if (authUser) {
-        await supabaseServer!.auth.admin.deleteUser(authUser.id);
-      }
-    }
+    await deleteUserDoc(id);
+    await addAuditLog(req.user!.id, req.user!.nome, 'Excluiu Usuário', `Excluiu o usuário ${user.usuario}.`, req.ip);
 
-    // Deleta de public.users
-    const { error } = await supabaseServer!.from('users').delete().eq('id', userId);
-    if (error) throw error;
-
-    await addAuditLog(
-      req.user!.id,
-      req.user!.nome,
-      'Exclusão de Usuário',
-      `Excluiu o usuário "${user.nome}" (${user.usuario}).`
-    );
-
-    return res.json({ message: 'Usuário removido com sucesso.' });
+    return res.json({ message: 'Usuário excluído com sucesso.' });
   } catch (err: any) {
-    return res.status(500).json({ error: 'Erro ao deletar usuário: ' + err.message });
+    return res.status(500).json({ error: 'Erro ao excluir usuário: ' + err.message });
   }
 });
 
 // -------------------------------------------------------------
-// CIDADES
+// ROTAS DE CIDADES
 // -------------------------------------------------------------
-app.get('/api/cidades', authenticateToken, async (_req: Request, res: Response) => {
+app.get('/api/cidades', authenticateToken, async (req: Request, res: Response) => {
   try {
-    const { data, error } = await supabaseServer!
-      .from('cidades')
-      .select('*')
-      .order('nome', { ascending: true });
-
-    if (error) throw error;
-
-    const formatted = (data || []).map((c) => ({
-      id: c.id,
-      nome: c.nome,
-      createdAt: c.created_at,
-    }));
-
-    return res.json(formatted);
+    const cidades = await getCidades();
+    return res.json(cidades);
   } catch (err: any) {
     return res.status(500).json({ error: 'Erro ao buscar cidades: ' + err.message });
   }
 });
 
 app.post('/api/cidades', authenticateToken, requireAdmin, async (req: AuthRequest, res: Response) => {
-  const { nome } = req.body;
-  if (!nome || !String(nome).trim()) {
-    return res.status(400).json({ error: 'Informe o nome da cidade.' });
-  }
-
-  const cleanNome = String(nome).trim();
-
   try {
-    const { data, error } = await supabaseServer!
-      .from('cidades')
-      .insert({ nome: cleanNome })
-      .select()
-      .single();
+    const { nome } = req.body;
+    if (!nome || !nome.trim()) {
+      return res.status(400).json({ error: 'O nome da cidade é obrigatório.' });
+    }
 
-    if (error) throw error;
+    const newCidade = await createCidadeDoc({ nome: nome.trim() });
+    await addAuditLog(req.user!.id, req.user!.nome, 'Criou Cidade', `Criou a cidade ${newCidade.nome}.`, req.ip);
 
-    await addAuditLog(
-      req.user!.id,
-      req.user!.nome,
-      'Criação de Cidade',
-      `Cadastrou a cidade "${data.nome}".`
-    );
-
-    return res.status(201).json({
-      id: data.id,
-      nome: data.nome,
-      createdAt: data.created_at,
-    });
+    return res.status(201).json(newCidade);
   } catch (err: any) {
     return res.status(500).json({ error: 'Erro ao criar cidade: ' + err.message });
   }
 });
 
 app.put('/api/cidades/:id', authenticateToken, requireAdmin, async (req: AuthRequest, res: Response) => {
-  const id = Number(req.params.id);
-  const { nome } = req.body;
-
-  if (!nome || !String(nome).trim()) {
-    return res.status(400).json({ error: 'Informe o nome da cidade.' });
-  }
-
   try {
-    const { data, error } = await supabaseServer!
-      .from('cidades')
-      .update({ nome: String(nome).trim() })
-      .eq('id', id)
-      .select()
-      .single();
+    const { id } = req.params;
+    const { nome } = req.body;
 
-    if (error) throw error;
+    const updated = await updateCidadeDoc(id, { nome: nome.trim() });
+    await addAuditLog(req.user!.id, req.user!.nome, 'Atualizou Cidade', `Renomeou cidade para ${updated.nome}.`, req.ip);
 
-    await addAuditLog(
-      req.user!.id,
-      req.user!.nome,
-      'Edição de Cidade',
-      `Alterou o nome da cidade ID ${id} para "${data.nome}".`
-    );
-
-    return res.json({
-      id: data.id,
-      nome: data.nome,
-      createdAt: data.created_at,
-    });
+    return res.json(updated);
   } catch (err: any) {
     return res.status(500).json({ error: 'Erro ao atualizar cidade: ' + err.message });
   }
 });
 
 app.delete('/api/cidades/:id', authenticateToken, requireAdmin, async (req: AuthRequest, res: Response) => {
-  const id = Number(req.params.id);
-
   try {
-    const { data: cidade } = await supabaseServer!.from('cidades').select('nome').eq('id', id).maybeSingle();
-    const { error } = await supabaseServer!.from('cidades').delete().eq('id', id);
+    const { id } = req.params;
+    const cidade = await getCidadeById(id);
+    if (!cidade) {
+      return res.status(404).json({ error: 'Cidade não encontrada.' });
+    }
 
-    if (error) throw error;
+    await deleteCidadeDoc(id);
+    await addAuditLog(req.user!.id, req.user!.nome, 'Excluiu Cidade', `Excluiu a cidade ${cidade.nome}.`, req.ip);
 
-    await addAuditLog(
-      req.user!.id,
-      req.user!.nome,
-      'Exclusão de Cidade',
-      `Removeu a cidade "${cidade?.nome || id}".`
-    );
-
-    return res.json({ message: 'Cidade removida com sucesso.' });
+    return res.json({ message: 'Cidade excluída com sucesso.' });
   } catch (err: any) {
-    return res.status(500).json({ error: 'Erro ao remover cidade: ' + err.message });
+    return res.status(500).json({ error: 'Erro ao excluir cidade: ' + err.message });
   }
 });
 
 // -------------------------------------------------------------
-// BAIRROS
+// ROTAS DE BAIRROS
 // -------------------------------------------------------------
 app.get('/api/bairros', authenticateToken, async (req: Request, res: Response) => {
-  const { cidadeId } = req.query;
-
   try {
-    let query = supabaseServer!.from('bairros').select('*, cidades(nome)').order('nome', { ascending: true });
+    const bairros = await getBairros();
+    const cidades = await getCidades();
+    const cidadesMap = new Map(cidades.map((c: any) => [c.id, c.nome]));
 
-    if (cidadeId) {
-      query = query.eq('cidade_id', Number(cidadeId));
-    }
-
-    const { data, error } = await query;
-    if (error) throw error;
-
-    const formatted = (data || []).map((b) => ({
-      id: b.id,
-      cidadeId: b.cidade_id,
-      cidadeNome: b.cidades?.nome || 'Cidade',
-      nome: b.nome,
-      createdAt: b.created_at,
+    const result = bairros.map((b: any) => ({
+      ...b,
+      cidades: { nome: cidadesMap.get(b.cidade_id) || 'Cidade Desconhecida' },
     }));
 
-    return res.json(formatted);
+    return res.json(result);
   } catch (err: any) {
     return res.status(500).json({ error: 'Erro ao buscar bairros: ' + err.message });
   }
 });
 
 app.post('/api/bairros', authenticateToken, requireAdmin, async (req: AuthRequest, res: Response) => {
-  const { cidadeId, nome } = req.body;
-
-  if (!cidadeId || !nome || !String(nome).trim()) {
-    return res.status(400).json({ error: 'Cidade e nome do bairro são obrigatórios.' });
-  }
-
   try {
-    const { data, error } = await supabaseServer!
-      .from('bairros')
-      .insert({
-        cidade_id: Number(cidadeId),
-        nome: String(nome).trim(),
-      })
-      .select('*, cidades(nome)')
-      .single();
+    const { nome, cidade_id } = req.body;
+    if (!nome || !cidade_id) {
+      return res.status(400).json({ error: 'Nome do bairro e cidade são obrigatórios.' });
+    }
 
-    if (error) throw error;
-
-    await addAuditLog(
-      req.user!.id,
-      req.user!.nome,
-      'Criação de Bairro',
-      `Cadastrou o bairro "${data.nome}" na cidade "${data.cidades?.nome || cidadeId}".`
-    );
-
-    return res.status(201).json({
-      id: data.id,
-      cidadeId: data.cidade_id,
-      cidadeNome: data.cidades?.nome,
-      nome: data.nome,
-      createdAt: data.created_at,
+    const newBairro = await createBairroDoc({
+      nome: nome.trim(),
+      cidade_id: String(cidade_id),
+      status: 'Não Iniciado',
+      total_quadras: 0,
+      quadras_concluidas: 0,
+      percentual_concluido: 0,
     });
+
+    await addAuditLog(req.user!.id, req.user!.nome, 'Criou Bairro', `Criou o bairro ${newBairro.nome}.`, req.ip);
+
+    return res.status(201).json(newBairro);
   } catch (err: any) {
     return res.status(500).json({ error: 'Erro ao criar bairro: ' + err.message });
   }
 });
 
 app.put('/api/bairros/:id', authenticateToken, requireAdmin, async (req: AuthRequest, res: Response) => {
-  const id = Number(req.params.id);
-  const { nome, cidadeId } = req.body;
-
-  const updates: any = {};
-  if (nome) updates.nome = String(nome).trim();
-  if (cidadeId) updates.cidade_id = Number(cidadeId);
-
   try {
-    const { data, error } = await supabaseServer!
-      .from('bairros')
-      .update(updates)
-      .eq('id', id)
-      .select('*, cidades(nome)')
-      .single();
+    const { id } = req.params;
+    const { nome, cidade_id } = req.body;
 
-    if (error) throw error;
+    const updates: any = {};
+    if (nome) updates.nome = nome.trim();
+    if (cidade_id) updates.cidade_id = String(cidade_id);
 
-    await addAuditLog(
-      req.user!.id,
-      req.user!.nome,
-      'Edição de Bairro',
-      `Atualizou o bairro "${data.nome}".`
-    );
+    const updated = await updateBairroDoc(id, updates);
+    await addAuditLog(req.user!.id, req.user!.nome, 'Atualizou Bairro', `Atualizou o bairro ${updated.nome}.`, req.ip);
 
-    return res.json({
-      id: data.id,
-      cidadeId: data.cidade_id,
-      cidadeNome: data.cidades?.nome,
-      nome: data.nome,
-      createdAt: data.created_at,
-    });
+    return res.json(updated);
   } catch (err: any) {
     return res.status(500).json({ error: 'Erro ao atualizar bairro: ' + err.message });
   }
 });
 
 app.delete('/api/bairros/:id', authenticateToken, requireAdmin, async (req: AuthRequest, res: Response) => {
-  const id = Number(req.params.id);
-
   try {
-    const { data: bairro } = await supabaseServer!.from('bairros').select('nome').eq('id', id).maybeSingle();
-    const { error } = await supabaseServer!.from('bairros').delete().eq('id', id);
-
-    if (error) throw error;
-
-    await addAuditLog(
-      req.user!.id,
-      req.user!.nome,
-      'Exclusão de Bairro',
-      `Excluiu o bairro "${bairro?.nome || id}".`
-    );
-
-    return res.json({ message: 'Bairro removido com sucesso.' });
-  } catch (err: any) {
-    return res.status(500).json({ error: 'Erro ao remover bairro: ' + err.message });
-  }
-});
-
-app.post('/api/bairros/:id/reset', authenticateToken, requireAdmin, async (req: AuthRequest, res: Response) => {
-  const bairroId = Number(req.params.id);
-
-  try {
-    const { data: bairro } = await supabaseServer!
-      .from('bairros')
-      .select('nome, cidades(nome)')
-      .eq('id', bairroId)
-      .maybeSingle();
-
+    const { id } = req.params;
+    const bairro = await getBairroById(id);
     if (!bairro) {
       return res.status(404).json({ error: 'Bairro não encontrado.' });
     }
 
-    // Busca quadras 'Feita' deste bairro para registrar no historico
-    const { data: doneQuadras } = await supabaseServer!
-      .from('quadras')
-      .select('*')
-      .eq('bairro_id', bairroId)
-      .eq('status', 'Feita');
+    await deleteBairroDoc(id);
+    await addAuditLog(req.user!.id, req.user!.nome, 'Excluiu Bairro', `Excluiu o bairro ${bairro.nome}.`, req.ip);
 
-    const countReset = doneQuadras ? doneQuadras.length : 0;
+    return res.json({ message: 'Bairro excluído com sucesso.' });
+  } catch (err: any) {
+    return res.status(500).json({ error: 'Erro ao excluir bairro: ' + err.message });
+  }
+});
 
-    // Atualiza quadras para 'Não feita'
-    await supabaseServer!
-      .from('quadras')
-      .update({
-        status: 'Não feita',
-        concluida_em: null,
-        usuario_id: null,
-        usuario_nome: null,
-      })
-      .eq('bairro_id', bairroId);
-
-    // Registra resets no histórico
-    if (doneQuadras && doneQuadras.length > 0) {
-      const historicoEntries = doneQuadras.map((q) => ({
-        quadra_id: q.id,
-        cidade_nome: (bairro.cidades as any)?.nome || 'Cidade',
-        bairro_nome: bairro.nome,
-        numero: q.numero,
-        acao: 'Resetada' as const,
-        usuario_nome: req.user!.nome,
-        data_hora: new Date().toISOString(),
-      }));
-
-      await supabaseServer!.from('historico').insert(historicoEntries);
+app.post('/api/bairros/:id/reset', authenticateToken, requireAdmin, async (req: AuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const bairro = await getBairroById(id);
+    if (!bairro) {
+      return res.status(404).json({ error: 'Bairro não encontrado.' });
     }
 
-    await addAuditLog(
-      req.user!.id,
-      req.user!.nome,
-      'Reset de Bairro',
-      `Resetou ${countReset} quadra(s) no bairro "${bairro.nome}".`
-    );
+    const quadras = await getQuadras();
+    const bairroQuadras = quadras.filter((q: any) => String(q.bairro_id) === String(id));
 
-    return res.json({
-      message: `Bairro "${bairro.nome}" resetado com sucesso.`,
-      countReset,
+    const historicoEntries: any[] = [];
+    for (const q of bairroQuadras) {
+      if (q.status === 'Feita') {
+        await updateQuadraDoc(q.id, {
+          status: 'Pendente',
+          data_conclusao: null,
+          usuario_id: null,
+          usuario_nome: null,
+        });
+
+        historicoEntries.push({
+          quadra_id: q.id,
+          quadra_numero: q.numero,
+          bairro_id: id,
+          bairro_nome: bairro.nome,
+          acao: 'Reset',
+          usuario_id: req.user!.id,
+          usuario_nome: req.user!.nome,
+          observacao: 'Reinicialização do Bairro',
+        });
+      }
+    }
+
+    if (historicoEntries.length > 0) {
+      await addHistoricoDocs(historicoEntries);
+    }
+
+    await updateBairroDoc(id, {
+      status: 'Não Iniciado',
+      quadras_concluidas: 0,
+      percentual_concluido: 0,
+      data_conclusao: null,
     });
+
+    await addAuditLog(req.user!.id, req.user!.nome, 'Reiniciou Bairro', `Reiniciou todas as quadras do bairro ${bairro.nome}.`, req.ip);
+
+    return res.json({ message: 'Bairro reiniciado com sucesso.' });
   } catch (err: any) {
-    return res.status(500).json({ error: 'Erro ao resetar bairro: ' + err.message });
+    return res.status(500).json({ error: 'Erro ao reiniciar bairro: ' + err.message });
   }
 });
 
 // -------------------------------------------------------------
-// QUADRAS
+// ROTAS DE QUADRAS
 // -------------------------------------------------------------
 app.get('/api/quadras', authenticateToken, async (req: Request, res: Response) => {
-  const { cidadeId, bairroId, status, usuarioId, numero, search } = req.query;
-
   try {
-    let query = supabaseServer!
-      .from('quadras')
-      .select('*, cidades(nome), bairros(nome)')
-      .order('id', { ascending: true });
+    const { search, bairro_id } = req.query;
+    let quadras = await getQuadras();
 
-    if (cidadeId) query = query.eq('cidade_id', Number(cidadeId));
-    if (bairroId) query = query.eq('bairro_id', Number(bairroId));
-    if (status) query = query.eq('status', String(status));
-    if (usuarioId) query = query.eq('usuario_id', Number(usuarioId));
-    if (numero) query = query.ilike('numero', `%${String(numero)}%`);
+    if (bairro_id) {
+      quadras = quadras.filter((q: any) => String(q.bairro_id) === String(bairro_id));
+    }
 
-    const { data, error } = await query;
-    if (error) throw error;
-
-    let formatted = (data || []).map((q) => ({
-      id: q.id,
-      cidadeId: q.cidade_id,
-      cidadeNome: q.cidades?.nome || '',
-      bairroId: q.bairro_id,
-      bairroNome: q.bairros?.nome || '',
-      numero: q.numero,
-      status: q.status,
-      concluidaEm: q.concluida_em,
-      usuarioId: q.usuario_id,
-      usuarioNome: q.usuario_nome,
-      createdAt: q.created_at,
-    }));
-
-    if (search && String(search).trim()) {
-      const term = String(search).trim().toLowerCase();
-      formatted = formatted.filter(
-        (q) =>
-          q.numero.toLowerCase().includes(term) ||
-          q.bairroNome.toLowerCase().includes(term) ||
-          q.cidadeNome.toLowerCase().includes(term) ||
-          (q.usuarioNome && q.usuarioNome.toLowerCase().includes(term))
+    if (search) {
+      const s = String(search).toLowerCase();
+      quadras = quadras.filter(
+        (q: any) =>
+          (q.numero && String(q.numero).toLowerCase().includes(s)) ||
+          (q.usuario_nome && q.usuario_nome.toLowerCase().includes(s))
       );
     }
 
-    return res.json(formatted);
+    return res.json(quadras);
   } catch (err: any) {
-    return res.status(500).json({ error: 'Erro ao listar quadras: ' + err.message });
+    return res.status(500).json({ error: 'Erro ao buscar quadras: ' + err.message });
   }
 });
 
 app.post('/api/quadras', authenticateToken, requireAdmin, async (req: AuthRequest, res: Response) => {
-  const { cidadeId, bairroId, numero } = req.body;
-
-  if (!cidadeId || !bairroId || !numero || !String(numero).trim()) {
-    return res.status(400).json({ error: 'Cidade, Bairro e Número da quadra são obrigatórios.' });
-  }
-
   try {
-    const { data, error } = await supabaseServer!
-      .from('quadras')
-      .insert({
-        cidade_id: Number(cidadeId),
-        bairro_id: Number(bairroId),
-        numero: String(numero).trim(),
-        status: 'Não feita',
-      })
-      .select('*, cidades(nome), bairros(nome)')
-      .single();
+    const { numero, bairro_id, observacao } = req.body;
+    if (!numero || !bairro_id) {
+      return res.status(400).json({ error: 'Número da quadra e bairro são obrigatórios.' });
+    }
 
-    if (error) throw error;
-
-    await addAuditLog(
-      req.user!.id,
-      req.user!.nome,
-      'Criação de Quadra',
-      `Criou a quadra ${data.numero} no bairro "${data.bairros?.nome || bairroId}".`
-    );
-
-    return res.status(201).json({
-      id: data.id,
-      cidadeId: data.cidade_id,
-      cidadeNome: data.cidades?.nome,
-      bairroId: data.bairro_id,
-      bairroNome: data.bairros?.nome,
-      numero: data.numero,
-      status: data.status,
-      concluidaEm: data.concluida_em,
-      usuarioId: data.usuario_id,
-      usuarioNome: data.usuario_nome,
-      createdAt: data.created_at,
+    const newQuadra = await createQuadraDoc({
+      numero: String(numero).trim(),
+      bairro_id: String(bairro_id),
+      status: 'Pendente',
+      observacao: observacao || '',
     });
+
+    // Atualizar contador do bairro
+    const quadras = await getQuadras();
+    const bairroQuadras = quadras.filter((q: any) => String(q.bairro_id) === String(bairro_id));
+    const done = bairroQuadras.filter((q: any) => q.status === 'Feita').length;
+    const total = bairroQuadras.length;
+    const perc = total > 0 ? Math.round((done / total) * 100) : 0;
+
+    await updateBairroDoc(String(bairro_id), {
+      total_quadras: total,
+      quadras_concluidas: done,
+      percentual_concluido: perc,
+    });
+
+    await addAuditLog(req.user!.id, req.user!.nome, 'Criou Quadra', `Criou a quadra ${newQuadra.numero}.`, req.ip);
+
+    return res.status(201).json(newQuadra);
   } catch (err: any) {
     return res.status(500).json({ error: 'Erro ao criar quadra: ' + err.message });
   }
 });
 
 app.post('/api/quadras/bulk', authenticateToken, requireAdmin, async (req: AuthRequest, res: Response) => {
-  const { cidadeId, bairroId, inicio, fim } = req.body;
-
-  if (!cidadeId || !bairroId || inicio === undefined || fim === undefined) {
-    return res.status(400).json({ error: 'Cidade, Bairro e intervalo de quadras (Início e Fim) são obrigatórios.' });
-  }
-
-  const startNum = Number(inicio);
-  const endNum = Number(fim);
-
-  if (startNum > endNum) {
-    return res.status(400).json({ error: 'O número inicial não pode ser maior que o final.' });
-  }
-
   try {
-    const inserts = [];
-    for (let i = startNum; i <= endNum; i++) {
-      const formattedNum = i < 10 ? `0${i}` : String(i);
+    const { inicio, fim, bairro_id } = req.body;
+    if (!inicio || !fim || !bairro_id) {
+      return res.status(400).json({ error: 'Intervalo (início e fim) e bairro são obrigatórios.' });
+    }
+
+    const start = Number(inicio);
+    const end = Number(fim);
+    if (isNaN(start) || isNaN(end) || start > end) {
+      return res.status(400).json({ error: 'Intervalo inválido.' });
+    }
+
+    const inserts: any[] = [];
+    for (let i = start; i <= end; i++) {
       inserts.push({
-        cidade_id: Number(cidadeId),
-        bairro_id: Number(bairroId),
-        numero: formattedNum,
-        status: 'Não feita' as const,
+        numero: String(i),
+        bairro_id: String(bairro_id),
+        status: 'Pendente',
       });
     }
 
-    const { data, error } = await supabaseServer!.from('quadras').insert(inserts).select();
-    if (error) throw error;
+    const created = await bulkCreateQuadrasDocs(inserts);
 
-    await addAuditLog(
-      req.user!.id,
-      req.user!.nome,
-      'Criação em Massa de Quadras',
-      `Criou ${data.length} quadras (da ${startNum} à ${endNum}) no bairro ID ${bairroId}.`
-    );
+    // Atualizar estatísticas do bairro
+    const quadras = await getQuadras();
+    const bairroQuadras = quadras.filter((q: any) => String(q.bairro_id) === String(bairro_id));
+    const done = bairroQuadras.filter((q: any) => q.status === 'Feita').length;
+    const total = bairroQuadras.length;
+    const perc = total > 0 ? Math.round((done / total) * 100) : 0;
 
-    return res.status(201).json({
-      message: `${data.length} quadras criadas com sucesso.`,
-      count: data.length,
+    await updateBairroDoc(String(bairro_id), {
+      total_quadras: total,
+      quadras_concluidas: done,
+      percentual_concluido: perc,
     });
+
+    await addAuditLog(req.user!.id, req.user!.nome, 'Criou Quadras em Lote', `Criou quadras de ${start} a ${end}.`, req.ip);
+
+    return res.status(201).json(created);
   } catch (err: any) {
-    return res.status(500).json({ error: 'Erro ao criar quadras em lote: ' + err.message });
+    return res.status(500).json({ error: 'Erro no cadastro em lote: ' + err.message });
   }
 });
 
 app.put('/api/quadras/:id', authenticateToken, requireAdmin, async (req: AuthRequest, res: Response) => {
-  const id = Number(req.params.id);
-  const { numero } = req.body;
-
-  if (!numero || !String(numero).trim()) {
-    return res.status(400).json({ error: 'Número da quadra é obrigatório.' });
-  }
-
   try {
-    const { data, error } = await supabaseServer!
-      .from('quadras')
-      .update({ numero: String(numero).trim() })
-      .eq('id', id)
-      .select('*, cidades(nome), bairros(nome)')
-      .single();
+    const { id } = req.params;
+    const { numero, status, usuario_id, usuario_nome, observacao } = req.body;
 
-    if (error) throw error;
+    const updates: any = {};
+    if (numero) updates.numero = String(numero).trim();
+    if (status) updates.status = status;
+    if (usuario_id !== undefined) updates.usuario_id = usuario_id ? String(usuario_id) : null;
+    if (usuario_nome !== undefined) updates.usuario_nome = usuario_nome || null;
+    if (observacao !== undefined) updates.observacao = observacao;
 
-    await addAuditLog(
-      req.user!.id,
-      req.user!.nome,
-      'Edição de Quadra',
-      `Alterou o número da quadra ID ${id} para ${data.numero}.`
-    );
+    const updated = await updateQuadraDoc(id, updates);
+    await addAuditLog(req.user!.id, req.user!.nome, 'Atualizou Quadra', `Atualizou quadra ${updated.numero}.`, req.ip);
 
-    return res.json({
-      id: data.id,
-      cidadeId: data.cidade_id,
-      cidadeNome: data.cidades?.nome,
-      bairroId: data.bairro_id,
-      bairroNome: data.bairros?.nome,
-      numero: data.numero,
-      status: data.status,
-      concluidaEm: data.concluida_em,
-      usuarioId: data.usuario_id,
-      usuarioNome: data.usuario_nome,
-      createdAt: data.created_at,
-    });
+    return res.json(updated);
   } catch (err: any) {
     return res.status(500).json({ error: 'Erro ao atualizar quadra: ' + err.message });
   }
 });
 
 app.delete('/api/quadras/:id', authenticateToken, requireAdmin, async (req: AuthRequest, res: Response) => {
-  const id = Number(req.params.id);
-
   try {
-    const { data: q } = await supabaseServer!.from('quadras').select('numero').eq('id', id).maybeSingle();
-    const { error } = await supabaseServer!.from('quadras').delete().eq('id', id);
-
-    if (error) throw error;
-
-    await addAuditLog(
-      req.user!.id,
-      req.user!.nome,
-      'Exclusão de Quadra',
-      `Excluiu a quadra ${q?.numero || id}.`
-    );
-
-    return res.json({ message: 'Quadra removida com sucesso.' });
-  } catch (err: any) {
-    return res.status(500).json({ error: 'Erro ao deletar quadra: ' + err.message });
-  }
-});
-
-app.patch('/api/quadras/:id/toggle', authenticateToken, async (req: AuthRequest, res: Response) => {
-  const id = Number(req.params.id);
-
-  try {
-    const { data: quadra } = await supabaseServer!
-      .from('quadras')
-      .select('*, cidades(nome), bairros(nome)')
-      .eq('id', id)
-      .maybeSingle();
-
+    const { id } = req.params;
+    const quadra = await getQuadraById(id);
     if (!quadra) {
       return res.status(404).json({ error: 'Quadra não encontrada.' });
     }
 
-    const newStatus = quadra.status === 'Feita' ? 'Não feita' : 'Feita';
-    const now = new Date().toISOString();
+    await deleteQuadraDoc(id);
 
-    const updates = {
-      status: newStatus,
-      concluida_em: newStatus === 'Feita' ? now : null,
-      usuario_id: newStatus === 'Feita' ? req.user!.id : null,
-      usuario_nome: newStatus === 'Feita' ? req.user!.nome : null,
-    };
+    // Recalcular bairro
+    if (quadra.bairro_id) {
+      const quadras = await getQuadras();
+      const bairroQuadras = quadras.filter((q: any) => String(q.bairro_id) === String(quadra.bairro_id));
+      const done = bairroQuadras.filter((q: any) => q.status === 'Feita').length;
+      const total = bairroQuadras.length;
+      const perc = total > 0 ? Math.round((done / total) * 100) : 0;
 
-    const { data: updated, error } = await supabaseServer!
-      .from('quadras')
-      .update(updates)
-      .eq('id', id)
-      .select('*, cidades(nome), bairros(nome)')
-      .single();
+      await updateBairroDoc(String(quadra.bairro_id), {
+        total_quadras: total,
+        quadras_concluidas: done,
+        percentual_concluido: perc,
+      });
+    }
 
-    if (error) throw error;
+    await addAuditLog(req.user!.id, req.user!.nome, 'Excluiu Quadra', `Excluiu a quadra ${quadra.numero}.`, req.ip);
 
-    // Registra no histórico
-    const acao = newStatus === 'Feita' ? ('Concluída' as const) : ('Resetada' as const);
-    await supabaseServer!.from('historico').insert({
-      quadra_id: id,
-      cidade_nome: updated.cidades?.nome || 'Cidade',
-      bairro_nome: updated.bairros?.nome || 'Bairro',
-      numero: updated.numero,
-      acao,
+    return res.json({ message: 'Quadra excluída com sucesso.' });
+  } catch (err: any) {
+    return res.status(500).json({ error: 'Erro ao excluir quadra: ' + err.message });
+  }
+});
+
+app.post('/api/quadras/:id/status', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { status, observacao } = req.body;
+
+    if (!status || !['Pendente', 'Em Andamento', 'Feita'].includes(status)) {
+      return res.status(400).json({ error: 'Status inválido.' });
+    }
+
+    const quadra = await getQuadraById(id);
+    if (!quadra) {
+      return res.status(404).json({ error: 'Quadra não encontrada.' });
+    }
+
+    const updates: any = { status };
+
+    if (status === 'Feita') {
+      updates.data_conclusao = new Date().toISOString();
+      updates.usuario_id = req.user!.id;
+      updates.usuario_nome = req.user!.nome;
+    } else {
+      updates.data_conclusao = null;
+    }
+
+    if (observacao !== undefined) {
+      updates.observacao = observacao;
+    }
+
+    const updated = await updateQuadraDoc(id, updates);
+
+    // Registrar no histórico
+    const bairro = await getBairroById(String(quadra.bairro_id));
+    await addHistoricoDocs({
+      quadra_id: quadra.id,
+      quadra_numero: quadra.numero,
+      bairro_id: quadra.bairro_id,
+      bairro_nome: bairro ? bairro.nome : 'Bairro',
+      acao: status,
+      usuario_id: req.user!.id,
       usuario_nome: req.user!.nome,
-      data_hora: now,
+      data_hora: new Date().toISOString(),
+      observacao: observacao || '',
     });
 
-    await addAuditLog(
-      req.user!.id,
-      req.user!.nome,
-      `Quadra ${acao}`,
-      `Marcou a quadra ${updated.numero} do bairro "${updated.bairros?.nome}" como ${newStatus}.`
-    );
+    // Recalcular bairro
+    if (quadra.bairro_id) {
+      const quadras = await getQuadras();
+      const bairroQuadras = quadras.filter((q: any) => String(q.bairro_id) === String(quadra.bairro_id));
+      const done = bairroQuadras.filter((q: any) => q.status === 'Feita').length;
+      const total = bairroQuadras.length;
+      const perc = total > 0 ? Math.round((done / total) * 100) : 0;
 
-    return res.json({
-      id: updated.id,
-      cidadeId: updated.cidade_id,
-      cidadeNome: updated.cidades?.nome,
-      bairroId: updated.bairro_id,
-      bairroNome: updated.bairros?.nome,
-      numero: updated.numero,
-      status: updated.status,
-      concluidaEm: updated.concluida_em,
-      usuarioId: updated.usuario_id,
-      usuarioNome: updated.usuario_nome,
-      createdAt: updated.created_at,
-    });
+      await updateBairroDoc(String(quadra.bairro_id), {
+        total_quadras: total,
+        quadras_concluidas: done,
+        percentual_concluido: perc,
+        status: perc === 100 ? 'Concluído' : perc > 0 ? 'Em Andamento' : 'Não Iniciado',
+      });
+    }
+
+    await addAuditLog(req.user!.id, req.user!.nome, 'Alterou Status Quadra', `Quadra ${quadra.numero} alterada para ${status}.`, req.ip);
+
+    return res.json(updated);
   } catch (err: any) {
     return res.status(500).json({ error: 'Erro ao alterar status da quadra: ' + err.message });
   }
 });
 
-app.get('/api/quadras/:id/historico', authenticateToken, async (req: Request, res: Response) => {
-  const quadraId = Number(req.params.id);
-
+app.patch('/api/quadras/:id/toggle', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
-    const { data, error } = await supabaseServer!
-      .from('historico')
-      .select('*')
-      .eq('quadra_id', quadraId)
-      .order('data_hora', { ascending: false });
+    const { id } = req.params;
+    const quadra = await getQuadraById(id);
+    if (!quadra) {
+      return res.status(404).json({ error: 'Quadra não encontrada.' });
+    }
 
-    if (error) throw error;
+    const newStatus = quadra.status === 'Feita' ? 'Pendente' : 'Feita';
+    const updates: any = { status: newStatus };
 
-    const formatted = (data || []).map((h) => ({
-      id: h.id,
-      quadraId: h.quadra_id,
-      cidadeNome: h.cidade_nome,
-      bairroNome: h.bairro_nome,
-      numero: h.numero,
-      acao: h.acao,
-      usuarioNome: h.usuario_nome,
-      dataHora: h.data_hora,
-    }));
+    if (newStatus === 'Feita') {
+      updates.data_conclusao = new Date().toISOString();
+      updates.usuario_id = req.user!.id;
+      updates.usuario_nome = req.user!.nome;
+    } else {
+      updates.data_conclusao = null;
+    }
 
-    return res.json(formatted);
+    const updated = await updateQuadraDoc(id, updates);
+
+    // Registrar no histórico
+    const bairro = await getBairroById(String(quadra.bairro_id));
+    await addHistoricoDocs({
+      quadra_id: quadra.id,
+      quadra_numero: quadra.numero,
+      bairro_id: quadra.bairro_id,
+      bairro_nome: bairro ? bairro.nome : 'Bairro',
+      acao: newStatus === 'Feita' ? 'Concluída' : 'Resetada',
+      usuario_id: req.user!.id,
+      usuario_nome: req.user!.nome,
+      data_hora: new Date().toISOString(),
+      observacao: '',
+    });
+
+    // Recalcular bairro
+    if (quadra.bairro_id) {
+      const quadras = await getQuadras();
+      const bairroQuadras = quadras.filter((q: any) => String(q.bairro_id) === String(quadra.bairro_id));
+      const done = bairroQuadras.filter((q: any) => q.status === 'Feita').length;
+      const total = bairroQuadras.length;
+      const perc = total > 0 ? Math.round((done / total) * 100) : 0;
+
+      await updateBairroDoc(String(quadra.bairro_id), {
+        total_quadras: total,
+        quadras_concluidas: done,
+        percentual_concluido: perc,
+        status: perc === 100 ? 'Concluído' : perc > 0 ? 'Em Andamento' : 'Não Iniciado',
+      });
+    }
+
+    await addAuditLog(req.user!.id, req.user!.nome, 'Alternou Status Quadra', `Quadra ${quadra.numero} alternada para ${newStatus}.`, req.ip);
+
+    return res.json(updated);
+  } catch (err: any) {
+    return res.status(500).json({ error: 'Erro ao alternar status da quadra: ' + err.message });
+  }
+});
+
+app.get('/api/quadras/:id/historico', authenticateToken, async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const historico = await getHistorico();
+    const filtered = historico.filter((h: any) => String(h.quadra_id) === String(id));
+    return res.json(filtered);
   } catch (err: any) {
     return res.status(500).json({ error: 'Erro ao buscar histórico da quadra: ' + err.message });
   }
 });
 
 // -------------------------------------------------------------
-// CARTÕES DE TERRITÓRIO
+// ROTAS DE HISTÓRICO
 // -------------------------------------------------------------
-app.get('/api/cartoes', authenticateToken, async (_req: Request, res: Response) => {
+app.get('/api/historico', authenticateToken, async (req: Request, res: Response) => {
   try {
-    const { data: cartoes, error } = await supabaseServer!
-      .from('cartoes')
-      .select('*, cidades(nome), bairros(nome), users(nome), cartao_quadras(quadra_id), cartao_designacoes(*)')
-      .order('id', { ascending: true });
+    const historico = await getHistorico();
+    return res.json(historico);
+  } catch (err: any) {
+    return res.status(500).json({ error: 'Erro ao buscar histórico: ' + err.message });
+  }
+});
 
-    if (error) throw error;
+// -------------------------------------------------------------
+// ROTAS DE CARTÕES DE TERRITÓRIO
+// -------------------------------------------------------------
+app.get('/api/cartoes', authenticateToken, async (req: Request, res: Response) => {
+  try {
+    const cartoes = await getCartoes();
+    const cartaoQuadras = await getCartaoQuadras();
+    const quadras = await getQuadras();
+    const designacoes = await getCartaoDesignacoes();
 
-    // Busca todas as quadras envolvidas
-    const { data: allQuadras } = await supabaseServer!
-      .from('quadras')
-      .select('*, cidades(nome), bairros(nome)');
+    const result = cartoes.map((c: any) => {
+      const joins = cartaoQuadras.filter((cq: any) => String(cq.cartao_id) === String(c.id));
+      const qIds = joins.map((j: any) => String(j.quadra_id));
+      const myQuadras = quadras.filter((q: any) => qIds.includes(String(q.id)));
+      const myDesigs = designacoes.filter((d: any) => String(d.cartao_id) === String(c.id));
 
-    const quadrasMap = new Map((allQuadras || []).map((q) => [q.id, q]));
-
-    const result = (cartoes || []).map((c) => {
-      const qIds = (c.cartao_quadras || []).map((cq: any) => cq.quadra_id);
-      const cardQuadrasList = qIds
-        .map((qid: number) => quadrasMap.get(qid))
-        .filter(Boolean)
-        .map((q: any) => ({
-          id: q.id,
-          cidadeId: q.cidade_id,
-          cidadeNome: q.cidades?.nome,
-          bairroId: q.bairro_id,
-          bairroNome: q.bairros?.nome,
-          numero: q.numero,
-          status: q.status,
-          concluidaEm: q.concluida_em,
-          usuarioId: q.usuario_id,
-          usuarioNome: q.usuario_nome,
-        }));
-
-      const totalQuadras = cardQuadrasList.length;
-      const concluidasQuadras = cardQuadrasList.filter((q: any) => q.status === 'Feita').length;
-
-      const designacoes = (c.cartao_designacoes || []).map((d: any) => ({
-        id: d.id,
-        dirigenteNome: d.dirigente_nome,
-        dataDesignacao: d.data_designacao,
-        dataConclusao: d.data_conclusao,
-      }));
+      const doneCount = myQuadras.filter((q: any) => q.status === 'Feita').length;
 
       return {
-        id: c.id,
-        titulo: c.titulo,
-        descricao: c.descricao,
-        cidadeId: c.cidade_id,
-        cidadeNome: c.cidades?.nome,
-        bairroId: c.bairro_id,
-        bairroNome: c.bairros?.nome,
-        usuarioId: c.usuario_id,
-        usuarioNome: c.users?.nome || c.usuario_nome,
-        quadraIds: qIds,
-        quadras: cardQuadrasList,
-        totalQuadras,
-        concluidasQuadras,
-        ultimaDataConcluida: c.ultima_data_concluida,
-        designacoes,
-        createdAt: c.created_at,
+        ...c,
+        quadras: myQuadras,
+        total_quadras: myQuadras.length,
+        quadras_concluidas: doneCount,
+        designacoes: myDesigs,
       };
     });
 
     return res.json(result);
   } catch (err: any) {
-    return res.status(500).json({ error: 'Erro ao listar cartões: ' + err.message });
-  }
-});
-
-app.get('/api/cartoes/:id', authenticateToken, async (req: Request, res: Response) => {
-  const id = Number(req.params.id);
-
-  try {
-    const { data: c, error } = await supabaseServer!
-      .from('cartoes')
-      .select('*, cidades(nome), bairros(nome), users(nome), cartao_quadras(quadra_id), cartao_designacoes(*)')
-      .eq('id', id)
-      .maybeSingle();
-
-    if (error || !c) {
-      return res.status(404).json({ error: 'Cartão não encontrado.' });
-    }
-
-    const qIds = (c.cartao_quadras || []).map((cq: any) => cq.quadra_id);
-
-    let cardQuadrasList: any[] = [];
-    if (qIds.length > 0) {
-      const { data: qData } = await supabaseServer!
-        .from('quadras')
-        .select('*, cidades(nome), bairros(nome)')
-        .in('id', qIds);
-
-      cardQuadrasList = (qData || []).map((q: any) => ({
-        id: q.id,
-        cidadeId: q.cidade_id,
-        cidadeNome: q.cidades?.nome,
-        bairroId: q.bairro_id,
-        bairroNome: q.bairros?.nome,
-        numero: q.numero,
-        status: q.status,
-        concluidaEm: q.concluida_em,
-        usuarioId: q.usuario_id,
-        usuarioNome: q.usuario_nome,
-      }));
-    }
-
-    const designacoes = (c.cartao_designacoes || []).map((d: any) => ({
-      id: d.id,
-      dirigenteNome: d.dirigente_nome,
-      dataDesignacao: d.data_designacao,
-      dataConclusao: d.data_conclusao,
-    }));
-
-    return res.json({
-      id: c.id,
-      titulo: c.titulo,
-      descricao: c.descricao,
-      cidadeId: c.cidade_id,
-      cidadeNome: c.cidades?.nome,
-      bairroId: c.bairro_id,
-      bairroNome: c.bairros?.nome,
-      usuarioId: c.usuario_id,
-      usuarioNome: c.users?.nome || c.usuario_nome,
-      quadraIds: qIds,
-      quadras: cardQuadrasList,
-      totalQuadras: cardQuadrasList.length,
-      concluidasQuadras: cardQuadrasList.filter((q: any) => q.status === 'Feita').length,
-      ultimaDataConcluida: c.ultima_data_concluida,
-      designacoes,
-      createdAt: c.created_at,
-    });
-  } catch (err: any) {
-    return res.status(500).json({ error: 'Erro ao obter cartão: ' + err.message });
+    return res.status(500).json({ error: 'Erro ao buscar cartões: ' + err.message });
   }
 });
 
 app.post('/api/cartoes', authenticateToken, requireAdmin, async (req: AuthRequest, res: Response) => {
-  const { titulo, descricao, cidadeId, bairroId, usuarioId, quadraIds } = req.body;
-
-  if (!titulo || !String(titulo).trim()) {
-    return res.status(400).json({ error: 'O título do cartão é obrigatório.' });
-  }
-
   try {
-    const qIds = Array.isArray(quadraIds) ? quadraIds.map(Number) : [];
-
-    // Insere o cartão em public.cartoes
-    const { data: newCard, error: cErr } = await supabaseServer!
-      .from('cartoes')
-      .insert({
-        titulo: String(titulo).trim(),
-        descricao: descricao ? String(descricao).trim() : null,
-        cidade_id: cidadeId ? Number(cidadeId) : null,
-        bairro_id: bairroId ? Number(bairroId) : null,
-        usuario_id: usuarioId ? Number(usuarioId) : null,
-      })
-      .select('*, cidades(nome), bairros(nome)')
-      .single();
-
-    if (cErr) throw cErr;
-
-    // Vínculo das quadras no cartao_quadras
-    if (qIds.length > 0) {
-      const joins = qIds.map((qid: number) => ({
-        cartao_id: newCard.id,
-        quadra_id: qid,
-      }));
-      await supabaseServer!.from('cartao_quadras').insert(joins);
+    const { titulo, cor, observacao, quadra_ids } = req.body;
+    if (!titulo || !titulo.trim()) {
+      return res.status(400).json({ error: 'Título do cartão é obrigatório.' });
     }
 
-    await addAuditLog(
-      req.user!.id,
-      req.user!.nome,
-      'Criação de Cartão',
-      `Criou o cartão de território "${newCard.titulo}".`
-    );
-
-    return res.status(201).json({
-      id: newCard.id,
-      titulo: newCard.titulo,
-      descricao: newCard.descricao,
-      cidadeId: newCard.cidade_id,
-      cidadeNome: newCard.cidades?.nome,
-      bairroId: newCard.bairro_id,
-      bairroNome: newCard.bairros?.nome,
-      usuarioId: newCard.usuario_id,
-      quadraIds: qIds,
-      createdAt: newCard.created_at,
+    const newCartao = await createCartaoDoc({
+      titulo: titulo.trim(),
+      cor: cor || '#10B981',
+      observacao: observacao || '',
     });
+
+    if (Array.isArray(quadra_ids) && quadra_ids.length > 0) {
+      const joins = quadra_ids.map((qId: any) => ({
+        cartao_id: newCartao.id,
+        quadra_id: String(qId),
+      }));
+      await addCartaoQuadras(joins);
+    }
+
+    await addAuditLog(req.user!.id, req.user!.nome, 'Criou Cartão', `Criou o cartão ${newCartao.titulo}.`, req.ip);
+
+    return res.status(201).json(newCartao);
   } catch (err: any) {
     return res.status(500).json({ error: 'Erro ao criar cartão: ' + err.message });
   }
 });
 
 app.put('/api/cartoes/:id', authenticateToken, requireAdmin, async (req: AuthRequest, res: Response) => {
-  const id = Number(req.params.id);
-  const { titulo, descricao, cidadeId, bairroId, usuarioId, quadraIds } = req.body;
-
   try {
+    const { id } = req.params;
+    const { titulo, cor, observacao, quadra_ids } = req.body;
+
     const updates: any = {};
-    if (titulo !== undefined) updates.titulo = String(titulo).trim();
-    if (descricao !== undefined) updates.descricao = String(descricao).trim();
-    if (cidadeId !== undefined) updates.cidade_id = cidadeId ? Number(cidadeId) : null;
-    if (bairroId !== undefined) updates.bairro_id = bairroId ? Number(bairroId) : null;
-    if (usuarioId !== undefined) updates.usuario_id = usuarioId ? Number(usuarioId) : null;
+    if (titulo) updates.titulo = titulo.trim();
+    if (cor) updates.cor = cor;
+    if (observacao !== undefined) updates.observacao = observacao;
 
-    const { data: updatedCard, error } = await supabaseServer!
-      .from('cartoes')
-      .update(updates)
-      .eq('id', id)
-      .select('*, cidades(nome), bairros(nome)')
-      .single();
+    const updated = await updateCartaoDoc(id, updates);
 
-    if (error) throw error;
-
-    // Atualiza junção em cartao_quadras se quadraIds fornecido
-    if (Array.isArray(quadraIds)) {
-      const qIds = quadraIds.map(Number);
-      await supabaseServer!.from('cartao_quadras').delete().eq('cartao_id', id);
-
-      if (qIds.length > 0) {
-        const joins = qIds.map((qid: number) => ({
+    if (Array.isArray(quadra_ids)) {
+      await deleteCartaoQuadrasByCartaoId(id);
+      if (quadra_ids.length > 0) {
+        const joins = quadra_ids.map((qId: any) => ({
           cartao_id: id,
-          quadra_id: qid,
+          quadra_id: String(qId),
         }));
-        await supabaseServer!.from('cartao_quadras').insert(joins);
+        await addCartaoQuadras(joins);
       }
     }
 
-    await addAuditLog(
-      req.user!.id,
-      req.user!.nome,
-      'Edição de Cartão',
-      `Atualizou o cartão "${updatedCard.titulo}".`
-    );
+    await addAuditLog(req.user!.id, req.user!.nome, 'Atualizou Cartão', `Atualizou cartão ${updated.titulo}.`, req.ip);
 
-    return res.json({
-      id: updatedCard.id,
-      titulo: updatedCard.titulo,
-      descricao: updatedCard.descricao,
-      cidadeId: updatedCard.cidade_id,
-      cidadeNome: updatedCard.cidades?.nome,
-      bairroId: updatedCard.bairro_id,
-      bairroNome: updatedCard.bairros?.nome,
-      usuarioId: updatedCard.usuario_id,
-      createdAt: updatedCard.created_at,
-    });
+    return res.json(updated);
   } catch (err: any) {
     return res.status(500).json({ error: 'Erro ao atualizar cartão: ' + err.message });
   }
 });
 
 app.delete('/api/cartoes/:id', authenticateToken, requireAdmin, async (req: AuthRequest, res: Response) => {
-  const id = Number(req.params.id);
-
   try {
-    const { data: c } = await supabaseServer!.from('cartoes').select('titulo').eq('id', id).maybeSingle();
-    const { error } = await supabaseServer!.from('cartoes').delete().eq('id', id);
-
-    if (error) throw error;
-
-    await addAuditLog(
-      req.user!.id,
-      req.user!.nome,
-      'Exclusão de Cartão',
-      `Excluiu o cartão de território "${c?.titulo || id}".`
-    );
-
-    return res.json({ message: 'Cartão removido com sucesso.' });
-  } catch (err: any) {
-    return res.status(500).json({ error: 'Erro ao deletar cartão: ' + err.message });
-  }
-});
-
-app.post('/api/cartoes/:id/quadras', authenticateToken, requireAdmin, async (req: AuthRequest, res: Response) => {
-  const cartaoId = Number(req.params.id);
-  const { numero, inicio, fim, numeros } = req.body;
-
-  try {
-    const { data: cartao } = await supabaseServer!
-      .from('cartoes')
-      .select('*, cidades(nome), bairros(nome)')
-      .eq('id', cartaoId)
-      .maybeSingle();
-
+    const { id } = req.params;
+    const cartao = await getCartaoById(id);
     if (!cartao) {
       return res.status(404).json({ error: 'Cartão não encontrado.' });
     }
 
-    const numsToCreate: string[] = [];
+    await deleteCartaoQuadrasByCartaoId(id);
+    await deleteCartaoDesignacoesByCartaoId(id);
+    await deleteCartaoDoc(id);
 
-    if (numeros && Array.isArray(numeros)) {
-      numeros.forEach((n) => {
-        if (n && String(n).trim()) numsToCreate.push(String(n).trim());
-      });
-    } else if (inicio !== undefined && fim !== undefined) {
-      const start = Number(inicio);
-      const end = Number(fim);
-      for (let i = start; i <= end; i++) {
-        numsToCreate.push(i < 10 ? `0${i}` : String(i));
-      }
-    } else if (numero) {
-      numsToCreate.push(String(numero).trim());
-    }
+    await addAuditLog(req.user!.id, req.user!.nome, 'Excluiu Cartão', `Excluiu cartão ${cartao.titulo}.`, req.ip);
 
-    if (numsToCreate.length === 0) {
-      return res.status(400).json({ error: 'Forneça ao menos um número de quadra para criar.' });
-    }
-
-    const createdQuadraIds: number[] = [];
-
-    for (const numStr of numsToCreate) {
-      const { data: newQ } = await supabaseServer!
-        .from('quadras')
-        .insert({
-          cidade_id: cartao.cidade_id,
-          bairro_id: cartao.bairro_id,
-          numero: numStr,
-          status: 'Não feita',
-        })
-        .select()
-        .single();
-
-      if (newQ) {
-        createdQuadraIds.push(newQ.id);
-        await supabaseServer!.from('cartao_quadras').insert({
-          cartao_id: cartaoId,
-          quadra_id: newQ.id,
-        });
-      }
-    }
-
-    await addAuditLog(
-      req.user!.id,
-      req.user!.nome,
-      'Quadras Adicionadas ao Cartão',
-      `Criou e vinculou ${createdQuadraIds.length} quadra(s) ao cartão "${cartao.titulo}".`
-    );
-
-    return res.json({
-      message: `${createdQuadraIds.length} quadras vinculadas com sucesso.`,
-      countCriadas: createdQuadraIds.length,
-    });
+    return res.json({ message: 'Cartão excluído com sucesso.' });
   } catch (err: any) {
-    return res.status(500).json({ error: 'Erro ao vincular quadras ao cartão: ' + err.message });
+    return res.status(500).json({ error: 'Erro ao excluir cartão: ' + err.message });
   }
 });
 
-app.patch('/api/cartoes/:cartaoId/quadras/:quadraId/toggle', authenticateToken, async (req: AuthRequest, res: Response) => {
-  const cartaoId = Number(req.params.cartaoId);
-  const quadraId = Number(req.params.quadraId);
-
+app.post('/api/cartoes/:id/quadras', authenticateToken, requireAdmin, async (req: AuthRequest, res: Response) => {
   try {
-    const { data: quadra } = await supabaseServer!
-      .from('quadras')
-      .select('*, cidades(nome), bairros(nome)')
-      .eq('id', quadraId)
-      .maybeSingle();
+    const { id } = req.params;
+    const { quadra_id } = req.body;
 
-    if (!quadra) {
-      return res.status(404).json({ error: 'Quadra não encontrada.' });
+    if (!quadra_id) {
+      return res.status(400).json({ error: 'ID da quadra é obrigatório.' });
     }
 
-    const newStatus = quadra.status === 'Feita' ? 'Não feita' : 'Feita';
-    const now = new Date().toISOString();
-
-    const { data: updated, error } = await supabaseServer!
-      .from('quadras')
-      .update({
-        status: newStatus,
-        concluida_em: newStatus === 'Feita' ? now : null,
-        usuario_id: newStatus === 'Feita' ? req.user!.id : null,
-        usuario_nome: newStatus === 'Feita' ? req.user!.nome : null,
-      })
-      .eq('id', quadraId)
-      .select('*, cidades(nome), bairros(nome)')
-      .single();
-
-    if (error) throw error;
-
-    const acao = newStatus === 'Feita' ? ('Concluída' as const) : ('Resetada' as const);
-    await supabaseServer!.from('historico').insert({
-      quadra_id: quadraId,
-      cidade_nome: updated.cidades?.nome || 'Cidade',
-      bairro_nome: updated.bairros?.nome || 'Bairro',
-      numero: updated.numero,
-      acao,
-      usuario_nome: req.user!.nome,
-      data_hora: now,
-    });
-
-    await addAuditLog(
-      req.user!.id,
-      req.user!.nome,
-      `Quadra ${acao} no Cartão`,
-      `Quadra ${updated.numero} do cartão ID ${cartaoId} alterada para ${newStatus}.`
-    );
-
-    return res.json({
-      id: updated.id,
-      cidadeId: updated.cidade_id,
-      cidadeNome: updated.cidades?.nome,
-      bairroId: updated.bairro_id,
-      bairroNome: updated.bairros?.nome,
-      numero: updated.numero,
-      status: updated.status,
-      concluidaEm: updated.concluida_em,
-      usuarioId: updated.usuario_id,
-      usuarioNome: updated.usuario_nome,
-    });
+    await addCartaoQuadras([{ cartao_id: id, quadra_id: String(quadra_id) }]);
+    return res.json({ message: 'Quadra vinculada ao cartão com sucesso.' });
   } catch (err: any) {
-    return res.status(500).json({ error: 'Erro ao alterar quadra do cartão: ' + err.message });
+    return res.status(500).json({ error: 'Erro ao vincular quadra: ' + err.message });
+  }
+});
+
+app.delete('/api/cartoes/:id/quadras/:quadraId', authenticateToken, requireAdmin, async (req: AuthRequest, res: Response) => {
+  try {
+    const { id, quadraId } = req.params;
+    const joins = await getCartaoQuadras();
+    const found = joins.find((j: any) => String(j.cartao_id) === String(id) && String(j.quadra_id) === String(quadraId));
+
+    if (found) {
+      await deleteCartaoQuadrasByCartaoId(id);
+      const remaining = joins.filter(
+        (j: any) => String(j.cartao_id) === String(id) && String(j.quadra_id) !== String(quadraId)
+      );
+      if (remaining.length > 0) {
+        await addCartaoQuadras(remaining.map((r: any) => ({ cartao_id: id, quadra_id: r.quadra_id })));
+      }
+    }
+
+    return res.json({ message: 'Quadra desvinculada com sucesso.' });
+  } catch (err: any) {
+    return res.status(500).json({ error: 'Erro ao desvincular quadra: ' + err.message });
+  }
+});
+
+app.patch('/api/cartoes/:cartaoId/quadras/:quadraId/toggle', authenticateToken, requireAdmin, async (req: AuthRequest, res: Response) => {
+  try {
+    const { cartaoId, quadraId } = req.params;
+    const joins = await getCartaoQuadras();
+    const exists = joins.some((j: any) => String(j.cartao_id) === String(cartaoId) && String(j.quadra_id) === String(quadraId));
+
+    if (exists) {
+      await deleteCartaoQuadrasByCartaoId(cartaoId);
+      const remaining = joins.filter(
+        (j: any) => String(j.cartao_id) === String(cartaoId) && String(j.quadra_id) !== String(quadraId)
+      );
+      if (remaining.length > 0) {
+        await addCartaoQuadras(remaining.map((r: any) => ({ cartao_id: cartaoId, quadra_id: r.quadra_id })));
+      }
+    } else {
+      await addCartaoQuadras([{ cartao_id: cartaoId, quadra_id: String(quadraId) }]);
+    }
+
+    const quadra = await getQuadraById(quadraId);
+    return res.json(quadra || { id: quadraId });
+  } catch (err: any) {
+    return res.status(500).json({ error: 'Erro ao alternar quadra no cartão: ' + err.message });
   }
 });
 
 app.put('/api/cartoes/:id/designacoes', authenticateToken, requireAdmin, async (req: AuthRequest, res: Response) => {
-  const cartaoId = Number(req.params.id);
-  const { designacoes, ultimaDataConcluida } = req.body;
-
   try {
-    if (Array.isArray(designacoes)) {
-      // Remove designacoes antigas e re-insere
-      await supabaseServer!.from('cartao_designacoes').delete().eq('cartao_id', cartaoId);
+    const { id } = req.params;
+    const { designacoes } = req.body;
 
-      if (designacoes.length > 0) {
-        const rows = designacoes.map((d: any) => ({
-          cartao_id: cartaoId,
-          dirigente_nome: d.dirigenteNome || d.dirigente_nome || 'Dirigente',
-          data_designacao: d.dataDesignacao || d.data_designacao || new Date().toISOString().split('T')[0],
-          data_conclusao: d.dataConclusao || d.data_conclusao || null,
-        }));
-        await supabaseServer!.from('cartao_designacoes').insert(rows);
-      }
+    if (!Array.isArray(designacoes)) {
+      return res.status(400).json({ error: 'Designações deve ser uma lista.' });
     }
 
-    if (ultimaDataConcluida !== undefined) {
-      await supabaseServer!
-        .from('cartoes')
-        .update({ ultima_data_concluida: ultimaDataConcluida })
-        .eq('id', cartaoId);
+    await deleteCartaoDesignacoesByCartaoId(id);
+    if (designacoes.length > 0) {
+      const rows = designacoes.map((d: any) => ({
+        cartao_id: id,
+        usuario_id: String(d.usuario_id),
+        usuario_nome: d.usuario_nome || 'Usuário',
+        data_designacao: d.data_designacao || new Date().toISOString(),
+        data_devolucao: d.data_devolucao || null,
+        status: d.status || 'Ativo',
+      }));
+      await addCartaoDesignacoes(rows);
     }
-
-    await addAuditLog(
-      req.user!.id,
-      req.user!.nome,
-      'Atualização de S-13/Designações',
-      `Atualizou a lista de designações do cartão ID ${cartaoId}.`
-    );
 
     return res.json({ message: 'Designações atualizadas com sucesso.' });
   } catch (err: any) {
@@ -1681,87 +1194,30 @@ app.put('/api/cartoes/:id/designacoes', authenticateToken, requireAdmin, async (
 });
 
 // -------------------------------------------------------------
-// HISTÓRICO E AUDITORIA
+// AUDITORIA E RELATÓRIOS
 // -------------------------------------------------------------
-app.get('/api/historico', authenticateToken, async (_req: Request, res: Response) => {
-  try {
-    const { data, error } = await supabaseServer!
-      .from('historico')
-      .select('*')
-      .order('data_hora', { ascending: false })
-      .limit(200);
-
-    if (error) throw error;
-
-    const formatted = (data || []).map((h) => ({
-      id: h.id,
-      quadraId: h.quadra_id,
-      cidadeNome: h.cidade_nome,
-      bairroNome: h.bairro_nome,
-      numero: h.numero,
-      acao: h.acao,
-      usuarioNome: h.usuario_nome,
-      dataHora: h.data_hora,
-    }));
-
-    return res.json(formatted);
-  } catch (err: any) {
-    return res.status(500).json({ error: 'Erro ao buscar histórico: ' + err.message });
-  }
-});
-
-app.get('/api/auditoria', authenticateToken, requireAdmin, async (req: Request, res: Response) => {
-  const { search } = req.query;
-
-  try {
-    let query = supabaseServer!.from('audit_logs').select('*').order('data_hora', { ascending: false }).limit(200);
-
-    if (search && String(search).trim()) {
-      const term = `%${String(search).trim()}%`;
-      query = query.or(`usuario_nome.ilike.${term},acao.ilike.${term},detalhes.ilike.${term}`);
-    }
-
-    const { data, error } = await query;
-    if (error) throw error;
-
-    const formatted = (data || []).map((l) => ({
-      id: l.id,
-      usuarioId: l.usuario_id,
-      usuarioNome: l.usuario_nome,
-      acao: l.acao,
-      detalhes: l.detalhes,
-      ip: l.ip,
-      dataHora: l.data_hora,
-    }));
-
-    return res.json(formatted);
-  } catch (err: any) {
-    return res.status(500).json({ error: 'Erro ao buscar logs de auditoria: ' + err.message });
-  }
-});
-
 // -------------------------------------------------------------
-// DASHBOARD & RELATÓRIOS
+// DASHBOARD E RELATÓRIOS
 // -------------------------------------------------------------
-app.get('/api/dashboard/stats', authenticateToken, async (_req: Request, res: Response) => {
+app.get('/api/dashboard/stats', authenticateToken, async (req: Request, res: Response) => {
   try {
-    const { count: totalCidades } = await supabaseServer!.from('cidades').select('*', { count: 'exact', head: true });
-    const { count: totalBairros } = await supabaseServer!.from('bairros').select('*', { count: 'exact', head: true });
-    const { count: totalQuadras } = await supabaseServer!.from('quadras').select('*', { count: 'exact', head: true });
-    const { count: quadrasConcluidas } = await supabaseServer!.from('quadras').select('*', { count: 'exact', head: true }).eq('status', 'Feita');
-    const { count: totalCartoes } = await supabaseServer!.from('cartoes').select('*', { count: 'exact', head: true });
+    const cidades = await getCidades();
+    const bairros = await getBairros();
+    const quadras = await getQuadras();
 
-    const totalQ = totalQuadras || 0;
-    const concQ = quadrasConcluidas || 0;
-    const pendQ = totalQ - concQ;
-    const perc = totalQ > 0 ? Math.round((concQ / totalQ) * 100) : 0;
+    const totalCidades = cidades.length;
+    const totalBairros = bairros.length;
+    const totalQuadras = quadras.length;
+    const quadrasConcluidas = quadras.filter((q: any) => q.status === 'Feita').length;
+    const quadrasPendentes = totalQuadras - quadrasConcluidas;
+    const percentualConcluido = totalQuadras > 0 ? Math.round((quadrasConcluidas / totalQuadras) * 100) : 0;
 
-    // Progresso por cidade
-    const { data: cidades } = await supabaseServer!.from('cidades').select('*, quadras(status)');
-    const progressoPorCidade = (cidades || []).map((c: any) => {
-      const qList = c.quadras || [];
-      const total = qList.length;
-      const done = qList.filter((q: any) => q.status === 'Feita').length;
+    const progressoPorCidade = cidades.map((c: any) => {
+      const cBairros = bairros.filter((b: any) => String(b.cidade_id) === String(c.id));
+      const cBairroIds = cBairros.map((b: any) => String(b.id));
+      const cQuadras = quadras.filter((q: any) => cBairroIds.includes(String(q.bairro_id)));
+      const done = cQuadras.filter((q: any) => q.status === 'Feita').length;
+      const total = cQuadras.length;
       return {
         cidade: c.nome,
         total,
@@ -1770,77 +1226,276 @@ app.get('/api/dashboard/stats', authenticateToken, async (_req: Request, res: Re
       };
     });
 
-    // Progresso por usuário
-    const { data: doneQuadras } = await supabaseServer!.from('quadras').select('usuario_nome').eq('status', 'Feita');
-    const userMap: Record<string, number> = {};
-    (doneQuadras || []).forEach((q) => {
-      if (q.usuario_nome) {
-        userMap[q.usuario_nome] = (userMap[q.usuario_nome] || 0) + 1;
+    const userCountMap = new Map<string, number>();
+    quadras.forEach((q: any) => {
+      if (q.status === 'Feita' && q.usuario_nome) {
+        userCountMap.set(q.usuario_nome, (userCountMap.get(q.usuario_nome) || 0) + 1);
       }
     });
 
-    const progressoPorUsuario = Object.entries(userMap).map(([usuario, totalConcluidas]) => ({
-      usuario,
-      totalConcluidas,
-    }));
+    const progressoPorUsuario = Array.from(userCountMap.entries())
+      .map(([usuario, totalConcluidas]) => ({ usuario, totalConcluidas }))
+      .sort((a, b) => b.totalConcluidas - a.totalConcluidas);
 
-    // Bairros mais avançados
-    const { data: bairros } = await supabaseServer!.from('bairros').select('*, cidades(nome), quadras(status)');
-    const bairrosList = (bairros || []).map((b: any) => {
-      const qList = b.quadras || [];
-      const total = qList.length;
-      const done = qList.filter((q: any) => q.status === 'Feita').length;
+    const cidadesMap = new Map(cidades.map((c: any) => [c.id, c.nome]));
+    const bairrosMaisAvançados = bairros.map((b: any) => {
+      const bQuadras = quadras.filter((q: any) => String(q.bairro_id) === String(b.id));
+      const total = bQuadras.length;
+      const done = bQuadras.filter((q: any) => q.status === 'Feita').length;
       return {
         bairro: b.nome,
-        cidade: b.cidades?.nome || 'Cidade',
+        cidade: cidadesMap.get(b.cidade_id) || 'Cidade',
         total,
         concluidas: done,
         percentual: total > 0 ? Math.round((done / total) * 100) : 0,
       };
-    });
-
-    bairrosList.sort((a, b) => b.percentual - a.percentual);
+    }).sort((a, b) => b.percentual - a.percentual).slice(0, 5);
 
     return res.json({
-      totalCidades: totalCidades || 0,
-      totalBairros: totalBairros || 0,
-      totalQuadras: totalQ,
-      quadrasConcluidas: concQ,
-      quadrasPendentes: pendQ,
-      percentualConcluido: perc,
-      totalCartoes: totalCartoes || 0,
+      totalCidades,
+      totalBairros,
+      totalQuadras,
+      quadrasConcluidas,
+      quadrasPendentes,
+      percentualConcluido,
       progressoPorCidade,
       progressoPorUsuario,
-      bairrosMaisAvançados: bairrosList.slice(0, 5),
+      bairrosMaisAvançados,
     });
   } catch (err: any) {
-    return res.status(500).json({ error: 'Erro ao gerar estatísticas do dashboard: ' + err.message });
+    return res.status(500).json({ error: 'Erro ao buscar estatísticas do dashboard: ' + err.message });
   }
 });
 
-app.get('/api/relatorios', authenticateToken, async (_req: Request, res: Response) => {
+app.get('/api/relatorios', authenticateToken, async (req: Request, res: Response) => {
   try {
-    const { count: totalQuadras } = await supabaseServer!.from('quadras').select('*', { count: 'exact', head: true });
-    const { count: quadrasConcluidas } = await supabaseServer!.from('quadras').select('*', { count: 'exact', head: true }).eq('status', 'Feita');
+    const cidades = await getCidades();
+    const bairros = await getBairros();
+    const quadras = await getQuadras();
+    const users = await getUsers();
 
-    const total = totalQuadras || 0;
-    const conc = quadrasConcluidas || 0;
+    const totalQuadras = quadras.length;
+    const quadrasConcluidas = quadras.filter((q: any) => q.status === 'Feita').length;
+    const quadrasPendentes = totalQuadras - quadrasConcluidas;
+    const percentualGeral = totalQuadras > 0 ? Math.round((quadrasConcluidas / totalQuadras) * 100) : 0;
+
+    const cidadesMap = new Map(cidades.map((c: any) => [c.id, c.nome]));
+
+    let maxCidadePerc = -1;
+    let cidadeMaisAvançada = 'Nenhuma';
+    cidades.forEach((c: any) => {
+      const cBairros = bairros.filter((b: any) => String(b.cidade_id) === String(c.id));
+      const cBairroIds = cBairros.map((b: any) => String(b.id));
+      const cQuadras = quadras.filter((q: any) => cBairroIds.includes(String(q.bairro_id)));
+      if (cQuadras.length > 0) {
+        const done = cQuadras.filter((q: any) => q.status === 'Feita').length;
+        const perc = Math.round((done / cQuadras.length) * 100);
+        if (perc > maxCidadePerc) {
+          maxCidadePerc = perc;
+          cidadeMaisAvançada = `${c.nome} (${perc}%)`;
+        }
+      }
+    });
+
+    let maxBairroPerc = -1;
+    let bairroMaisAvançado = 'Nenhum';
+    bairros.forEach((b: any) => {
+      const bQuadras = quadras.filter((q: any) => String(q.bairro_id) === String(b.id));
+      if (bQuadras.length > 0) {
+        const done = bQuadras.filter((q: any) => q.status === 'Feita').length;
+        const perc = Math.round((done / bQuadras.length) * 100);
+        if (perc > maxBairroPerc) {
+          maxBairroPerc = perc;
+          bairroMaisAvançado = `${b.nome} (${perc}%)`;
+        }
+      }
+    });
+
+    const userMap = new Map<string, { usuarioId: any; nome: string; usuario: string; permissao: string; quadrasFeitas: number }>();
+    users.forEach((u: any) => {
+      userMap.set(String(u.id), {
+        usuarioId: u.id,
+        nome: u.nome,
+        usuario: u.usuario,
+        permissao: u.permissao,
+        quadrasFeitas: 0,
+      });
+    });
+
+    quadras.forEach((q: any) => {
+      if (q.status === 'Feita' && q.usuario_id) {
+        const existing = userMap.get(String(q.usuario_id));
+        if (existing) {
+          existing.quadrasFeitas += 1;
+        } else if (q.usuario_nome) {
+          userMap.set(String(q.usuario_id), {
+            usuarioId: q.usuario_id,
+            nome: q.usuario_nome,
+            usuario: q.usuario_nome,
+            permissao: 'Usuário',
+            quadrasFeitas: 1,
+          });
+        }
+      }
+    });
+
+    const userStats = Array.from(userMap.values())
+      .filter((u) => u.quadrasFeitas > 0)
+      .sort((a, b) => b.quadrasFeitas - a.quadrasFeitas);
+
+    const relatorioBairros = bairros.map((b: any) => {
+      const bQuadras = quadras.filter((q: any) => String(q.bairro_id) === String(b.id));
+      const total = bQuadras.length;
+      const done = bQuadras.filter((q: any) => q.status === 'Feita').length;
+      return {
+        bairroId: b.id,
+        bairroNome: b.nome,
+        cidadeNome: cidadesMap.get(b.cidade_id) || 'Cidade',
+        total,
+        concluidas: done,
+        pendentes: total - done,
+        percentual: total > 0 ? Math.round((done / total) * 100) : 0,
+      };
+    });
+
+    return res.json({
+      geradoEm: new Date().toISOString(),
+      totalQuadras,
+      quadrasConcluidas,
+      quadrasPendentes,
+      percentualConcluido: percentualGeral,
+      percentualGeral,
+      cidadeMaisAvançada,
+      bairroMaisAvançado,
+      tempoMedioEstimado: '2 a 4 semanas',
+      userStats,
+      relatorioBairros,
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: 'Erro ao gerar relatórios: ' + err.message });
+  }
+});
+
+app.get('/api/auditoria', authenticateToken, requireAdmin, async (req: Request, res: Response) => {
+  try {
+    const logs = await getAuditLogs();
+    return res.json(logs);
+  } catch (err: any) {
+    return res.status(500).json({ error: 'Erro ao buscar logs de auditoria: ' + err.message });
+  }
+});
+
+app.get('/api/relatorios/resumo', authenticateToken, async (req: Request, res: Response) => {
+  try {
+    const cidades = await getCidades();
+    const bairros = await getBairros();
+    const quadras = await getQuadras();
+    const cartoes = await getCartoes();
+
+    const totalCidades = cidades.length;
+    const totalBairros = bairros.length;
+    const totalQuadras = quadras.length;
+    const quadrasConcluidas = quadras.filter((q: any) => q.status === 'Feita').length;
+    const totalCartoes = cartoes.length;
+
+    // Quadras por cidade
+    const quadrasPorCidade = cidades.map((c: any) => {
+      const cBairros = bairros.filter((b: any) => String(b.cidade_id) === String(c.id));
+      const cBairroIds = cBairros.map((b: any) => String(b.id));
+      const cQuadras = quadras.filter((q: any) => cBairroIds.includes(String(q.bairro_id)));
+      const done = cQuadras.filter((q: any) => q.status === 'Feita').length;
+
+      return {
+        cidade: c.nome,
+        total: cQuadras.length,
+        concluidas: done,
+      };
+    });
+
+    // Ranking de usuários que concluíram quadras
+    const userMap = new Map<string, number>();
+    quadras.forEach((q: any) => {
+      if (q.status === 'Feita' && q.usuario_nome) {
+        userMap.set(q.usuario_nome, (userMap.get(q.usuario_nome) || 0) + 1);
+      }
+    });
+
+    const maioresTrabalhadores = Array.from(userMap.entries())
+      .map(([nome, quadrasConcluidas]) => ({ nome, quadrasConcluidas }))
+      .sort((a, b) => b.quadrasConcluidas - a.quadrasConcluidas)
+      .slice(0, 5);
+
+    return res.json({
+      totalCidades,
+      totalBairros,
+      totalQuadras,
+      quadrasConcluidas,
+      totalCartoes,
+      quadrasPorCidade,
+      maioresTrabalhadores,
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: 'Erro ao gerar resumo de relatórios: ' + err.message });
+  }
+});
+
+app.get('/api/relatorios/cidades', authenticateToken, async (req: Request, res: Response) => {
+  try {
+    const cidades = await getCidades();
+    const bairros = await getBairros();
+    const quadras = await getQuadras();
+
+    const result = cidades.map((c: any) => {
+      const cBairros = bairros.filter((b: any) => String(b.cidade_id) === String(c.id));
+      const cBairroIds = cBairros.map((b: any) => String(b.id));
+      const cQuadras = quadras.filter((q: any) => cBairroIds.includes(String(q.bairro_id)));
+
+      const total = cQuadras.length;
+      const done = cQuadras.filter((q: any) => q.status === 'Feita').length;
+      const pend = total - done;
+      const perc = total > 0 ? Math.round((done / total) * 100) : 0;
+
+      return {
+        cidadeId: c.id,
+        cidadeNome: c.nome,
+        totalBairros: cBairros.length,
+        totalQuadras: total,
+        quadrasConcluidas: done,
+        quadrasPendentes: pend,
+        percentual: perc,
+      };
+    });
+
+    return res.json(result);
+  } catch (err: any) {
+    return res.status(500).json({ error: 'Erro ao gerar relatório por cidade: ' + err.message });
+  }
+});
+
+app.get('/api/relatorios/bairros', authenticateToken, async (req: Request, res: Response) => {
+  try {
+    const bairros = await getBairros();
+    const cidades = await getCidades();
+    const quadras = await getQuadras();
+
+    const cidadesMap = new Map(cidades.map((c: any) => [c.id, c.nome]));
+
+    const total = quadras.length;
+    const conc = quadras.filter((q: any) => q.status === 'Feita').length;
     const pend = total - conc;
     const percGeral = total > 0 ? Math.round((conc / total) * 100) : 0;
 
-    const { data: bairros } = await supabaseServer!.from('bairros').select('*, cidades(nome), quadras(status)');
-
-    const relatorioBairros = (bairros || []).map((b: any) => {
-      const qList = b.quadras || [];
-      const totalB = qList.length;
-      const doneB = qList.filter((q: any) => q.status === 'Feita').length;
+    const relatorioBairros = bairros.map((b: any) => {
+      const bQuadras = quadras.filter((q: any) => String(q.bairro_id) === String(b.id));
+      const totalB = bQuadras.length;
+      const doneB = bQuadras.filter((q: any) => q.status === 'Feita').length;
       const pendB = totalB - doneB;
       const percB = totalB > 0 ? Math.round((doneB / totalB) * 100) : 0;
 
       return {
         bairroId: b.id,
         bairroNome: b.nome,
-        cidadeNome: b.cidades?.nome || 'Cidade',
+        cidadeNome: cidadesMap.get(b.cidade_id) || 'Cidade',
         total: totalB,
         concluidas: doneB,
         pendentes: pendB,
@@ -1857,13 +1512,8 @@ app.get('/api/relatorios', authenticateToken, async (_req: Request, res: Respons
       relatorioBairros,
     });
   } catch (err: any) {
-    return res.status(500).json({ error: 'Erro ao gerar relatórios: ' + err.message });
+    return res.status(500).json({ error: 'Erro ao gerar relatório por bairro: ' + err.message });
   }
-});
-
-// Catch-all para rotas de API inexistentes
-app.use('/api/*', (req: Request, res: Response) => {
-  res.status(404).json({ error: `Rota API não encontrada: ${req.method} ${req.originalUrl}` });
 });
 
 // Middleware de Erro Global Express
@@ -1875,8 +1525,10 @@ app.use((err: any, req: Request, res: Response, _next: NextFunction) => {
   });
 });
 
-// Configuração do Vite Middleware em ambiente local
-async function setupViteOrStatic() {
+async function startServer() {
+  await seedDefaultUsers();
+
+  // Configuração do Vite Middleware em ambiente local ou estático em produção
   if (process.env.NODE_ENV !== 'production' && !process.env.VERCEL) {
     const vite = await createViteServer({
       server: { middlewareMode: true },
@@ -1890,15 +1542,20 @@ async function setupViteOrStatic() {
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
-}
 
-setupViteOrStatic();
-
-if (!process.env.VERCEL) {
-  const PORT = process.env.PORT || 3000;
-  app.listen(PORT, () => {
-    console.log(`Servidor rodando em http://localhost:${PORT}`);
+  // Catch-all para rotas de API inexistentes
+  app.all('/api/*', (req: Request, res: Response) => {
+    res.status(404).json({ error: `Rota API não encontrada: ${req.method} ${req.originalUrl}` });
   });
+
+  if (!process.env.VERCEL) {
+    const PORT = Number(process.env.PORT) || 3000;
+    app.listen(PORT, '0.0.0.0', () => {
+      console.log(`Servidor rodando em http://0.0.0.0:${PORT}`);
+    });
+  }
 }
+
+startServer();
 
 export default app;

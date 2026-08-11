@@ -185,7 +185,7 @@ export const UsuariosView: React.FC<UsuariosViewProps> = ({
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
-                {users.map((u) => {
+                {(users || []).map((u) => {
                   const isAdminRole = u.permissao === 'Administrador';
                   return (
                     <tr

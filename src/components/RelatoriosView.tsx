@@ -209,9 +209,9 @@ export const RelatoriosView: React.FC<RelatoriosViewProps> = ({ darkMode }) => {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
-              {data.userStats.map((u) => (
+              {(data?.userStats || []).map((u) => (
                 <tr
-                  key={u.usuarioId}
+                  key={u.usuarioId || u.usuario}
                   className="hover:bg-slate-100/50 dark:hover:bg-slate-800/40 transition-colors"
                 >
                   <td className="py-3.5 px-4 font-bold">{u.nome}</td>
@@ -222,6 +222,13 @@ export const RelatoriosView: React.FC<RelatoriosViewProps> = ({ darkMode }) => {
                   </td>
                 </tr>
               ))}
+              {(!data?.userStats || data.userStats.length === 0) && (
+                <tr>
+                  <td colSpan={4} className="py-4 text-center text-slate-400">
+                    Nenhum agente com quadras concluídas no momento.
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>

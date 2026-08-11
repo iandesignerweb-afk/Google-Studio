@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { User } from './types';
 import { api, getStoredToken } from './services/api';
-import { supabase, isSupabaseConfigured } from './lib/supabase';
 import { Sidebar, NavItem } from './components/Sidebar';
 import { Header } from './components/Header';
 import { LoginView } from './components/LoginView';
@@ -55,44 +54,19 @@ export default function App() {
       }
     };
 
-    if (isSupabaseConfigured && supabase) {
-      supabase.auth.getSession().then(({ data: { session } }) => {
-        if (session) {
-          localStorage.setItem('quadras_auth_token', session.access_token);
-          api
-            .getMe()
-            .then((user) => setCurrentUser(user))
-            .catch(() => checkToken())
-            .finally(() => setAuthChecking(false));
-        } else {
-          checkToken();
-        }
-      });
+    checkToken();
 
-      const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-        if (session) {
-          localStorage.setItem('quadras_auth_token', session.access_token);
-          api.getMe().then((user) => setCurrentUser(user)).catch(() => {});
-        } else {
-          localStorage.removeItem('quadras_auth_token');
-          setCurrentUser(null);
-        }
-      });
+    const handleUnauthorized = () => {
+      setCurrentUser(null);
+    };
+    window.addEventListener('auth_unauthorized', handleUnauthorized);
 
-      return () => subscription.unsubscribe();
-    } else {
-      checkToken();
-    }
+    return () => {
+      window.removeEventListener('auth_unauthorized', handleUnauthorized);
+    };
   }, []);
 
   const handleLogout = async () => {
-    if (isSupabaseConfigured && supabase) {
-      try {
-        await supabase.auth.signOut();
-      } catch (err) {
-        console.warn('Supabase signOut note:', err);
-      }
-    }
     await api.logout();
     setCurrentUser(null);
   };

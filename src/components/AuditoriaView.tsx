@@ -93,7 +93,7 @@ export const AuditoriaView: React.FC<AuditoriaViewProps> = ({ darkMode }) => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
-                {logs.map((log) => (
+                {(logs || []).map((log) => (
                   <tr
                     key={log.id}
                     className="hover:bg-slate-100/50 dark:hover:bg-slate-800/40 transition-colors"
